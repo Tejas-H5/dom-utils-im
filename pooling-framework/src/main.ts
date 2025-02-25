@@ -1,7 +1,9 @@
 
 /**
  * Asserts are used here to catch developer mistakes. 
- * I reckon you should also leave them in for production deployments.
+ *
+ * You might want to make this a No-op in production builds, for performance.
+ *
  * Every assertion should have a comment above it explaining why it's there, to make
  * debugging for users easier. This is also why I don't bother printing a different debug message per assertion -
  * you should be able to break on these in the debugger and see a more descriptive comment,
@@ -16,27 +18,89 @@ function assert<T>(value: T | false | null | undefined | 0 | ""): value is T {
     return true;
 }
 
+function userError(): never {
+    throw new Error("User error");
+}
+
+function devError(): never {
+    throw new Error("Dev error");
+}
+
+type ImmediateModeArray<T> = {
+    items: T[];
+    expectedLength: number;
+    idx: number;
+};
+
+function newImArray<T>(): ImmediateModeArray<T> {
+    return {
+        items: [],
+        expectedLength: -1,
+        idx: -1,
+    };
+}
+
+function imGetNext<T>(arr: ImmediateModeArray<T>): T | undefined {
+    arr.idx++;
+
+    if (arr.idx < arr.items.length) {
+        return arr.items[arr.idx];
+    }
+
+    if (arr.idx === arr.items.length) {
+        if (arr.expectedLength === -1) {
+            return undefined;
+        }
+
+        // Once an immediate mode array has been finalized, every subsequent render must create the same number of things.
+        // In this case, you've rendered too many things.
+        assert(false);
+    }
+
+    // DEV: whenever imGetNext returns undefined, we should be pushing stuff to the array.
+    assert(false);
+}
+
+function imPush<T>(arr: ImmediateModeArray<T>, value: T): T {
+    // DEV: Pushing to an immediate mode array after it's been finalized is always a mistake
+    assert(arr.expectedLength === -1);
+    assert(arr.items.length === arr.idx);
+
+    arr.items.push(value);
+
+    return value;
+}
+
+function imReset(arr: ImmediateModeArray<unknown>) {
+    if (arr.expectedLength === -1) {
+        if (arr.idx !== -1) {
+            arr.expectedLength = arr.items.length;
+        }
+    } else {
+        // Once an immediate mode array has been finalized, every subsequent render must create the same number of things.
+        // In this case, you've rendered too few(?) things.
+        assert(arr.expectedLength === arr.items.length);
+    }
+
+    arr.idx = -1;
+}
+
 type ValidElement = HTMLElement | SVGElement;
 type StyleObject<U extends ValidElement> = (U extends HTMLElement ? keyof HTMLElement["style"] : keyof SVGElement["style"]);
 
-// Similar to React's useBlah hook pattern, so I'm calling it a 'hook'
-const HOOK_UI_ROOT = 1;
-const HOOK_STATE = 2;
-const HOOK_LIST = 3;
-type UIHook = {
-    t: typeof HOOK_UI_ROOT;
+// Similar to React's useBlah hook pattern, but I've decided to not call it a 'hook' because that is a meaningless name.
+const ITEM_UI_ROOT = 1;
+const ITEM_LIST = 2;
+type UIChildRoot = {
+    t: typeof ITEM_UI_ROOT;
     v: UIRoot<ValidElement>;
 };
-type StateHook = {
-    t: typeof HOOK_STATE;
-    v: [supplier: () => unknown, value: unknown];
-};
 type ListHook = {
-    t: typeof HOOK_LIST;
+    t: typeof ITEM_LIST;
     v: ListRenderer;
 };
 
-type Hook = UIHook | StateHook | ListHook;
+type UIRootItem = UIChildRoot | ListHook;
 
 type DomRoot<E extends ValidElement = ValidElement> = {
     root: E;
@@ -63,43 +127,18 @@ function setChildAtEl(root: Element, i: number, child: Element) {
     }
 }
 
-function getHookCount(lastCount: number, thisCount: number): number {
-    let result = 0;
-    if (lastCount === 0) {
-        result = thisCount;
-    } else {
-        // You should be rerendering the same number of hooks each time.
-        // This is because we have no plans on writing a 'diffing' algorithm, as these have bad performance characteristics
-        assert(lastCount === thisCount);
-    }
-
-    return result;
-}
-
 class UIRoot<E extends ValidElement = ValidElement> {
     readonly root: E;
     readonly domRoot: DomRoot<E>;
     readonly type: string;
 
-    readonly hooks: Hook[] = [];
-    currentHookCount = 0;
-    maxHookCount = 0;
-    hasRealChildren = false;
+    readonly items = newImArray<UIRootItem>();
     openListRenderers = 0;
+    hasRealChildren = false;
 
-    readonly styles: [string, string][] = [];
-    maxStyleCount = 0;
-    styleCount = 0;
-
-    readonly classes: [string, boolean][] = [];
-    maxClassCount = 0;
-    classCount = 0;
-
-    // TODO
-    readonly attributes: [string, string | null][] = [];
-    maxAttributeCount = 0;
-    attrCount  = 0;
-    
+    readonly styles = newImArray<[string, string]>();
+    readonly classes = newImArray<[string, boolean]>();
+    readonly attributes = newImArray<[string, string | null]>();
 
     // Users should call `newUiRoot` instead.
     constructor(domRoot: DomRoot<E>, type: string) {
@@ -122,40 +161,14 @@ class UIRoot<E extends ValidElement = ValidElement> {
             resetDomRoot(this.domRoot);
         }
 
-        this.maxHookCount = getHookCount(this.maxHookCount, this.currentHookCount);
-        this.currentHookCount = 0;
+        imReset(this.items);
+        imReset(this.classes);
+        imReset(this.styles);
+        imReset(this.attributes);
 
         // DEV: If this is negative, I fkd up (I decremented this thing too many times) 
         // User: If this is positive, u fked up (You forgot to finalize an open list)
         assert(this.openListRenderers === 0);
-
-        this.maxClassCount = getHookCount(this.maxClassCount, this.classCount);
-        this.classCount = 0;
-
-        this.maxStyleCount = getHookCount(this.maxStyleCount, this.styleCount);
-        this.styleCount = 0;
-
-        this.maxAttributeCount = getHookCount(this.maxAttributeCount, this.attrCount);
-        this.attrCount = 0;
-    }
-
-    private getNextHook(t: Hook["t"]) {
-        const idx = this.currentHookCount;
-        this.currentHookCount++;
-
-        // DEV: We should be adding a hook to this array when we call getNextHook, and it returned undefined.
-        assert(idx <= this.hooks.length);
-
-        let result;
-        if (idx < this.hooks.length) {
-            const hook = this.hooks[idx];
-            // Hooks should be called in the same order every single time for this to work.
-            assert(hook.t === t);
-
-            result = hook;
-        } 
-
-        return result;
     }
 
     el<E2 extends ValidElement = ValidElement>(type: string): UIRoot<E2> {
@@ -163,86 +176,43 @@ class UIRoot<E extends ValidElement = ValidElement> {
         // render to that instead.
         assert(this.openListRenderers === 0);
 
-        // TODO: typescript magic to remove `as`
-        const hook = this.getNextHook(HOOK_UI_ROOT) as UIHook | undefined;
-
-        let result;
-        if (hook) {
-            result = hook.v as UIRoot<E2>;
-
-            // The nth call to this DOM element hook should be called with the same type every time - 
-            // otherwise, we would have to recreate this DOM element, which is not ideal for performance, 
-            // and would cause us to return a reference to a different element which also complicates user code.
-            assert(result.type === type);
-        } else {
+        let result = imGetNext(this.items);
+        if (!result) {
             // Kinda need to trust the user on this one...
             const newElement = document.createElement(type) as E2;
-            result = new UIRoot({ root: newElement, currentIdx: -1 }, type);
-            this.hooks.push({ t: HOOK_UI_ROOT, v: result });
+            const newUiRoot = new UIRoot({ root: newElement, currentIdx: -1 }, type);
+            result = imPush(this.items, { t: ITEM_UI_ROOT, v: newUiRoot });
         }
 
-        appendToDomRoot(this.domRoot, result.domRoot.root);
-        result.begin();
-
-        return result;
-    }
-
-    state<T>(supplier: () => T): T {
-        // TODO: typescript magic to remove `as`
-        const hook = this.getNextHook(HOOK_STATE) as StateHook | undefined;
-
-        let result: T | undefined;
-        if (hook) {
-            const [prevSupplier, state] = hook.v;
-
-            // The function that constructs state should be the same for every render. 
-            // Changing the function on later rerenders will have no effect, and is indicative of a logic bug.
-            //
-            // Rather than doing
-            //
-            // ```
-            // const state = r.state(() => blah);
-            // ```
-            //
-            // You should do this instead:
-            //
-            // ```
-            // function newBlah() {
-            //      return blah;
-            // }
-            //
-            // ...
-            //
-            // const state = r.state(newBlah);
-            //
-            // ```
-            assert(supplier === prevSupplier);
-
-            result = state as T;
-        } else {
-            result = supplier();
-            this.hooks.push({ t: HOOK_STATE, v: [supplier, result] })
+        if (result.t !== ITEM_UI_ROOT) {
+            // The same hooks must be called in the same order every time
+            userError();
         }
 
-        return result;
+        // The same hooks must be called in the same order every time
+        assert(result.v.type === type);
+        
+        appendToDomRoot(this.domRoot, result.v.domRoot.root);
+        result.v.begin();
+        return result.v as UIRoot<E2>;
     }
 
     beginList(): ListRenderer {
         // TODO: typescript magic to remove `as`
-        const hook = this.getNextHook(HOOK_LIST) as ListHook | undefined;
-
-        let result;
-        if (hook) {
-            result = hook.v;
-        } else {
-            result = new ListRenderer(this);
-            this.hooks.push({ t: HOOK_LIST, v: result });
+        let result = imGetNext(this.items);
+        if (!result) {
+            result = imPush(this.items, { t: ITEM_LIST, v: new ListRenderer(this) });
         }
 
-        result.begin();
+        // The same hooks must be called in the same order every time
+        if (result.t !== ITEM_LIST) {
+            userError();
+        }
+
+        result.v.begin();
         this.openListRenderers++;
 
-        return result;
+        return result.v;
     }
 
     s<K extends (keyof E["style"])>(key: K, value: string) {
@@ -250,23 +220,16 @@ class UIRoot<E extends ValidElement = ValidElement> {
     }
 
     setSyle<K extends (keyof E["style"])>(key: K, value: string) {
-        const idx = this.styleCount;
-        this.styleCount++;
-
-        let existing;
-        if (idx < this.styles.length) {
-            // The same styles must always be set, in the same order. Immediate mode :(
-            assert(this.styles[idx][0] === key);
-            existing = this.styles[idx];
+        let result = imGetNext(this.styles);
+        if (!result) {
+            result = imPush(this.styles, [key as string, ""]);
         } else {
-            const newBlock: [string, string] = [key as string, ""];
-            this.styles.push(newBlock);
-
-            existing = newBlock;
+            // The same styles must always be pushed in the same order
+            assert(result[0] === key);
         }
 
-        if (existing[1] !== value) {
-            existing[1] = value;
+        if (result[1] !== value) {
+            result[1] = value;
 
             // @ts-expect-error it sure can
             this.root.style[key] = value;
@@ -282,19 +245,12 @@ class UIRoot<E extends ValidElement = ValidElement> {
 
     // NOTE: the effect of this method will persist accross renders
     setClass(val: string, enabled: boolean = true) {
-        const idx = this.classCount;
-        this.classCount++;
-
-        let existing;
-        if (idx < this.classes.length) {
-            // The same classes must be toggled in the same order every time
-            assert(val === this.classes[idx][0]);
-
-            existing = this.classes[idx];
+        let existing = imGetNext(this.classes);
+        if (!existing) {
+            existing = imPush(this.classes, [val, false]);
         } else {
-            const newBlock: [string, boolean] = [val, false];
-            this.classes.push(newBlock);
-            existing = newBlock;
+            // The same classes must be toggled in the same order every time
+            assert(val === existing[0]);
         }
 
         if (existing[1] !== enabled) {
@@ -318,20 +274,12 @@ class UIRoot<E extends ValidElement = ValidElement> {
     }
 
     setAttribute(attr: string, val: string) {
-        const idx = this.attrCount;
-        this.attrCount++;
-
-        let existing;
-        if (idx < this.attributes.length) {
-            // The same styles must always be set, in the same order. Immediate mode :(
-            assert(this.attributes[idx][0] === attr);
-
-            existing = this.attributes[idx];
+        let existing = imGetNext(this.attributes);
+        if (!existing) {
+            existing = imPush(this.attributes, [attr, null]);
         } else {
-            const newBlock: [string, string | null] = [attr, null];
-            this.attributes.push(newBlock);
-
-            existing = newBlock;
+            // The same attributes must be set in the same order every time
+            assert(existing[0] === attr);
         }
 
         if (existing[1] !== val) {
@@ -347,10 +295,10 @@ class UIRoot<E extends ValidElement = ValidElement> {
     }
 
     __removeAllDomElements() {
-        for (let i = 0; i < this.hooks.length; i++) {
-            const hook = this.hooks[i];
-            if (hook.t === HOOK_UI_ROOT) {
-                hook.v.domRoot.root.remove();
+        for (let i = 0; i < this.items.items.length; i++) {
+            const item = this.items.items[i];
+            if (item.t === ITEM_UI_ROOT) {
+                item.v.domRoot.root.remove();
             }
         }
     }
@@ -466,60 +414,76 @@ function Slider(r: UIRoot, labelText: string, onChange: (val: number) => void) {
     return root;
 }
 
-let t = 0;
-let count = 100;
-let period = 2;
-function App(r: UIRoot) {
-    const appRoot = div(r);
-    {
-        text(div(appRoot), "Hello world! ");
-        text(div(appRoot), "Lets fkng go! ");
-        text(div(appRoot), "Count: " + count);
-        text(div(appRoot), "Period: " + period);
-    }
-    div(r);
+function App() {
+    let t = 0;
+    let count = 100;
+    let period = 2;
 
-    const aList = r.beginList();
-    for (let i = 0; i < count; i++) {
-        const r = aList.getNext();
-        const s = span(r);
-        text(s, "A");
-
-        s.s("display", "inline-block")
-            .s("transform", `translateY(${Math.sin(t + (2 * Math.PI * (i / period))) * 50}px)`);
+    function setPeriod(val: number) {
+        period = val;
+        rerenderApp();
     }
-    aList.finalize();
 
-    const buttonBar = div(r);
-    buttonBar
-        .s("position", "fixed")
-        .s("bottom", "10px").s("left", "10px");
-    {
-        Slider(buttonBar, "period", val => {
-            period = val;
-            rerenderApp();
-        });
-        Button(buttonBar, "Increment count", () => {
-            count += 100;
-            rerenderApp();
-        });
-        Button(buttonBar, "Refresh", () => {
-            rerenderApp();
-        });
-        Button(buttonBar, "Decrement count", () => {
-            count -= 100;
-            rerenderApp();
-        });
+    function refresh() {
+        rerenderApp();
     }
+
+    function incrementCount() {
+        count += 100;
+        rerenderApp();
+    }
+
+    function decrementCount() {
+        count -= 100;
+        rerenderApp();
+    }
+
+    function renderApp(root: UIRoot) {
+        let r = root;
+
+        const appRoot = div(r); r = appRoot;
+        {
+            text(div(r), "Hello world! ");
+            text(div(r), "Lets fkng go! ");
+            text(div(r), "Count: " + count);
+            text(div(r), "Period: " + period);
+        }
+        r = root;
+
+        const aList = r.beginList();
+        for (let i = 0; i < count; i++) {
+            const r = aList.getNext();
+            const s = span(r);
+            text(s, "A");
+
+            s.s("display", "inline-block")
+                .s("transform", `translateY(${Math.sin(t + (2 * Math.PI * (i / period))) * 50}px)`);
+        }
+        aList.finalize();
+
+        const buttonBar = div(r); r = buttonBar;
+        {
+            r.s("position", "fixed")
+                .s("bottom", "10px").s("left", "10px");
+            Slider(r, "period", setPeriod);
+            Button(r, "Increment count", incrementCount);
+            Button(r, "Refresh", refresh);
+            Button(r, "Decrement count", decrementCount);
+        }
+        r = root;
+    }
+
+    return renderApp;
 }
 
 
 const appRoot = newUiRoot(document.body);
 
+const AppComponent = App();
 function rerenderApp() {
     appRoot.begin();
 
-    App(appRoot);
+    AppComponent(appRoot);
 }
 
 rerenderApp();
