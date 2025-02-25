@@ -1,4 +1,76 @@
 
+//////////
+// animation utils. The vast majority of apps will need animation, so I figured I'd just merge this into dom-utils itself
+
+export type AnimateFunction = (dt: number) => boolean;
+
+export type RealtimeAnimation = {
+    isRunning: boolean;
+    isInQueue: boolean;
+    fn: AnimateFunction;
+}
+
+const queue: RealtimeAnimation[] = [];
+
+const MAX_DT = 100;
+
+let lastTime = 0;
+function runAnimation(time: DOMHighResTimeStamp) {
+    const dtMs = time - lastTime;
+    lastTime = time;
+
+    if (dtMs < MAX_DT) {
+        for (let i = 0; i < queue.length; i++) {
+            const handle = queue[i];
+
+            handle.isRunning = handle.fn(dtMs / 1000);
+
+            if (!handle.isRunning) {
+                // O(1) fast-remove
+                queue[i] = queue[queue.length - 1];
+                queue.pop();
+                handle.isInQueue = false;
+                i--;
+            }
+        }
+    }
+
+    if (queue.length > 0) {
+        requestAnimationFrame(runAnimation);
+    }
+}
+
+export function newAnimation(fn: AnimateFunction): RealtimeAnimation {
+    return { fn, isRunning: false, isInQueue: false };
+}
+
+/**
+ * Adds an animation to the realtime animation queue that runs with `requestAnimationFrame`.
+ * See {@link newAnimation}.
+ */
+export function startAnimation(animation: RealtimeAnimation) {
+    if (animation.isInQueue) {
+        return;
+    }
+
+    const restartQueue = queue.length === 0;
+
+    queue.push(animation);
+    animation.isInQueue = true;
+
+    if (restartQueue) {
+        requestAnimationFrame(runAnimation);
+    }
+}
+
+export function getCurrentNumAnimations() {
+    return queue.length;
+}
+
+
+//////////
+// Immediate mode rendering API (NEW!)
+
 /**
  * Asserts are used here to catch developer mistakes. 
  *
@@ -91,24 +163,29 @@ type StyleObject<U extends ValidElement> = (U extends HTMLElement ? keyof HTMLEl
 // Similar to React's useBlah hook pattern, but I've decided to not call it a 'hook' because that is a meaningless name.
 const ITEM_UI_ROOT = 1;
 const ITEM_LIST = 2;
-type UIChildRoot = {
+const ITEM_STATE = 3;
+type UIChildRootItem = {
     t: typeof ITEM_UI_ROOT;
     v: UIRoot<ValidElement>;
 };
-type ListHook = {
+type ListRendererItem = {
     t: typeof ITEM_LIST;
     v: ListRenderer;
 };
+type StateItem  = {
+    t: typeof ITEM_STATE;
+    v: unknown;
+};
 
-type UIRootItem = UIChildRoot | ListHook;
+type UIRootItem = UIChildRootItem | ListRendererItem | StateItem;
 
 type DomRoot<E extends ValidElement = ValidElement> = {
     root: E;
     currentIdx: number;
 };
 
-function resetDomRoot(domRoot: DomRoot) {
-    domRoot.currentIdx = -1;
+function resetDomRoot(domRoot: DomRoot, idx = -1) {
+    domRoot.currentIdx = idx;
 }
 
 function appendToDomRoot(domRoot: DomRoot, child: ValidElement) {
@@ -135,6 +212,7 @@ class UIRoot<E extends ValidElement = ValidElement> {
     readonly items = newImArray<UIRootItem>();
     openListRenderers = 0;
     hasRealChildren = false;
+    manuallyHidden = false;
 
     readonly styles = newImArray<[string, string]>();
     readonly classes = newImArray<[string, boolean]>();
@@ -147,15 +225,13 @@ class UIRoot<E extends ValidElement = ValidElement> {
         this.type = type;
     }
 
-    // TODO: think of how we can remove this 
-    begin() {
-        this.__begin(true);
+    get isFirstRender() {
+        return this.items.expectedLength === -1;
     }
 
-    __begin(shouldResetDomRoot: boolean) {
-        if (shouldResetDomRoot) {
-            resetDomRoot(this.domRoot);
-        }
+    // TODO: think of how we can remove this 
+    __begin(idx?: number) {
+        resetDomRoot(this.domRoot, idx);
 
         imReset(this.items);
         imReset(this.classes);
@@ -256,6 +332,26 @@ class UIRoot<E extends ValidElement = ValidElement> {
     }
 }
 
+/**
+ * Since it is so common to do, this is a util to set the display of a component to "None".
+ * Also does some type narrowing.
+ */
+export function setVisible<T>(r: UIRoot, visibleState: T | null | undefined | false | "" | 0): visibleState is T {
+    const hiddenState = !visibleState;
+    if (r.manuallyHidden === hiddenState) {
+        return !!visibleState;
+    }
+
+    r.manuallyHidden = hiddenState;
+    if (visibleState) {
+        r.root.style.setProperty("display", "", "")
+    } else {
+        r.root.style.setProperty("display", "none", "important")
+    }
+
+    return !!visibleState;
+}
+
 function el<E extends ValidElement = ValidElement>(r: UIRoot, type: string): UIRoot<E> {
     // Don't render new elements to this thing when you have a list renderer that is active!
     // render to that instead.
@@ -278,8 +374,26 @@ function el<E extends ValidElement = ValidElement>(r: UIRoot, type: string): UIR
     assert(result.v.type === type);
 
     appendToDomRoot(r.domRoot, result.v.domRoot.root);
-    result.v.begin();
+    result.v.__begin();
     return result.v as UIRoot<E>;
+}
+
+function getState<T>(r: UIRoot, supplier: () => T): T {
+    // Don't render new elements to this thing when you have a list renderer that is active!
+    // render to that instead.
+    assert(r.openListRenderers === 0);
+
+    let result = imGetNext(r.items);
+    if (!result) {
+        result = imPush(r.items, { t: ITEM_STATE, v: supplier() });
+    } else {
+        if (result.t !== ITEM_STATE) {
+            // The same hooks must be called in the same order every time
+            userError();
+        }
+    }
+
+    return result.v as T;
 }
 
 function beginList(r: UIRoot): ListRenderer {
@@ -297,6 +411,12 @@ function beginList(r: UIRoot): ListRenderer {
     r.openListRenderers++;
 
     return result.v;
+}
+
+function list(r: UIRoot, listRenderFn: (l: ListRenderer) => void) {
+    const list = beginList(r);
+    listRenderFn(list);
+    list.end();
 }
 
 class ListRenderer {
@@ -333,7 +453,7 @@ class ListRenderer {
         }
 
         // Append new list elements to where we're currently appending
-        result.__begin(false);
+        result.__begin(result.domRoot.currentIdx);
         this.builderIdx++;
 
         return result;
@@ -362,20 +482,36 @@ function newUiRoot<E extends ValidElement>(root: E): UIRoot<E> {
     return result;
 }
 
-function div(r: UIRoot) {
-    return el<HTMLDivElement>(r, "div");
+type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot) => void;
+
+function div(r: UIRoot, next?: RenderFn<HTMLDivElement>) {
+    const result = el<HTMLDivElement>(r, "div");
+    next?.(result);
+    return result;
 }
 
-function span(r: UIRoot) {
-    return el<HTMLSpanElement>(r, "span");
+function span(r: UIRoot, next?: RenderFn<HTMLDivElement>) {
+    const result = el<HTMLSpanElement>(r, "span");
+    next?.(result);
+    return result;
 }
 
 function text(r: UIRoot, text: string) {
-    const s = span(r);
-    if (s.root.textContent !== text) {
-        s.root.textContent = text;
+    // Don't overwrite actual dom elements with text!
+    assert(!r.hasRealChildren);
+
+    if (r.root.textContent !== text) {
+        r.root.textContent = text;
     }
-    return s;
+}
+
+type Component = () => RenderFn;
+
+// so fkn stupid...
+function component(r: UIRoot, c: Component) {
+    r.__begin();
+    const Component = getState(r, c);
+    Component(r);
 }
 
 function Button(r: UIRoot, buttonText: string, onClick: () => void) {
@@ -409,6 +545,47 @@ function Slider(root: UIRoot, labelText: string, onChange: (val: number) => void
     return root;
 }
 
+function canAnimate(r: UIRoot) {
+    return !r.manuallyHidden && r.root.isConnected;
+}
+
+function realtime(r: UIRoot, fn: RenderFn) {
+    let rerenderPoint = r.domRoot.currentIdx;
+
+    fn(r);
+
+    const animation = getState(r, () => {
+        return newAnimation(() => {
+            r.__begin(rerenderPoint);
+            fn(r);
+            return canAnimate(r);
+        })
+    });
+    startAnimation(animation);
+}
+
+function WallClock(r: UIRoot) {
+    realtime(r, r => {
+        const value = getState(r, () => ({ val: 0 }));
+        value.val += (-0.5 + Math.random()) * 0.02;
+        if (value.val > 1) value.val = 1;
+        if (value.val < -1) value.val = -1;
+        div(r, r => {
+            text(r, "brownian motion: " + value.val + "");
+        });
+        list(r, l => {
+            let n = value.val < 0 ? 1 : 2;
+
+            for (let i = 0; i < n; i++) {
+                const r = l.getNext();
+                div(r, r => {
+                    text(r, new Date().toISOString());
+                });
+            }
+        })
+    });
+}
+
 function App() {
     let t = 0;
     let count = 100;
@@ -424,48 +601,63 @@ function App() {
     }
 
     function incrementCount() {
-        count += 100;
+        count += 1000;
         rerenderApp();
     }
 
     function decrementCount() {
-        count -= 100;
+        count -= 1000;
         rerenderApp();
     }
 
-    function renderApp(root: UIRoot) {
-        let r = root;
-
-        const appRoot = div(r); 
-        {
+    function renderApp(r: UIRoot) {
+        div(r, r => {
             text(div(r), "Hello world! ");
             text(div(r), "Lets fkng go! ");
             text(div(r), "Count: " + count);
             text(div(r), "Period: " + period);
-        }
-        r = root;
+            div(r, r => {
+                r.isFirstRender && r
+                    .s("height", "5px")
+                    .s("backgroundColor", "black");
+            });
+            div(r, r => {
+                if (r.isFirstRender) {
+                    r.s("padding", "10px")
+                        .s("border", "1px solid black")
+                        .s("display", "inline-block");
+                }
 
-        const aList = beginList(r);
-        for (let i = 0; i < count; i++) {
-            const r = aList.getNext();
-            const s = span(r);
-            text(s, "A");
+                WallClock(r);
+            })
+        })
 
-            s.s("display", "inline-block")
-                .s("transform", `translateY(${Math.sin(t + (2 * Math.PI * (i / period))) * 50}px)`);
-        }
-        aList.end();
+        list(r, l => {
+            for (let i = 0; i < 10; i++) {
+                list(r, l => {
+                    for (let i = 0; i < count / 10; i++) {
+                        const r = l.getNext();
+                        span(r, r => {
+                            text(r, "A");
 
-        const buttonBar = div(r); r = buttonBar;
-        {
-            r.s("position", "fixed")
+                            r.isFirstRender && r.s("display", "inline-block");
+                            r.s("transform", `translateY(${Math.sin(t + (2 * Math.PI * (i / period))) * 50}px)`);
+                        });
+                    }
+                });
+            }
+        });
+
+        div(r, r => {
+            r.isFirstRender && r
+                .s("position", "fixed")
                 .s("bottom", "10px").s("left", "10px");
+
             Slider(r, "period", setPeriod);
             Button(r, "Increment count", incrementCount);
             Button(r, "Refresh", refresh);
             Button(r, "Decrement count", decrementCount);
-        }
-        r = root;
+        }); 
     }
 
     return renderApp;
@@ -474,11 +666,8 @@ function App() {
 
 const appRoot = newUiRoot(document.body);
 
-const AppComponent = App();
-function rerenderApp() {
-    appRoot.begin();
-
-    AppComponent(appRoot);
+function rerenderApp() { 
+    component(appRoot, App);
 }
 
 rerenderApp();
