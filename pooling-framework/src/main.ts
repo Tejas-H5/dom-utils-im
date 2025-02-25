@@ -147,10 +147,6 @@ class UIRoot<E extends ValidElement = ValidElement> {
         this.type = type;
     }
 
-    throwForReferentialIntegrity(errorMessage: string): never {
-        throw new Error(`${errorMessage}. Otherwise, we can't guarantee referential integrity between renders.`);
-    }
-
     // TODO: think of how we can remove this 
     begin() {
         this.__begin(true);
@@ -169,50 +165,6 @@ class UIRoot<E extends ValidElement = ValidElement> {
         // DEV: If this is negative, I fkd up (I decremented this thing too many times) 
         // User: If this is positive, u fked up (You forgot to finalize an open list)
         assert(this.openListRenderers === 0);
-    }
-
-    el<E2 extends ValidElement = ValidElement>(type: string): UIRoot<E2> {
-        // Don't render new elements to this thing when you have a list renderer that is active!
-        // render to that instead.
-        assert(this.openListRenderers === 0);
-
-        let result = imGetNext(this.items);
-        if (!result) {
-            // Kinda need to trust the user on this one...
-            const newElement = document.createElement(type) as E2;
-            const newUiRoot = new UIRoot({ root: newElement, currentIdx: -1 }, type);
-            result = imPush(this.items, { t: ITEM_UI_ROOT, v: newUiRoot });
-        }
-
-        if (result.t !== ITEM_UI_ROOT) {
-            // The same hooks must be called in the same order every time
-            userError();
-        }
-
-        // The same hooks must be called in the same order every time
-        assert(result.v.type === type);
-        
-        appendToDomRoot(this.domRoot, result.v.domRoot.root);
-        result.v.begin();
-        return result.v as UIRoot<E2>;
-    }
-
-    beginList(): ListRenderer {
-        // TODO: typescript magic to remove `as`
-        let result = imGetNext(this.items);
-        if (!result) {
-            result = imPush(this.items, { t: ITEM_LIST, v: new ListRenderer(this) });
-        }
-
-        // The same hooks must be called in the same order every time
-        if (result.t !== ITEM_LIST) {
-            userError();
-        }
-
-        result.v.begin();
-        this.openListRenderers++;
-
-        return result.v;
     }
 
     s<K extends (keyof E["style"])>(key: K, value: string) {
@@ -304,6 +256,49 @@ class UIRoot<E extends ValidElement = ValidElement> {
     }
 }
 
+function el<E extends ValidElement = ValidElement>(r: UIRoot, type: string): UIRoot<E> {
+    // Don't render new elements to this thing when you have a list renderer that is active!
+    // render to that instead.
+    assert(r.openListRenderers === 0);
+
+    let result = imGetNext(r.items);
+    if (!result) {
+        // Kinda need to trust the user on this one...
+        const newElement = document.createElement(type) as E;
+        const newUiRoot = new UIRoot({ root: newElement, currentIdx: -1 }, type);
+        result = imPush(r.items, { t: ITEM_UI_ROOT, v: newUiRoot });
+    }
+
+    if (result.t !== ITEM_UI_ROOT) {
+        // The same hooks must be called in the same order every time
+        userError();
+    }
+
+    // The same hooks must be called in the same order every time
+    assert(result.v.type === type);
+
+    appendToDomRoot(r.domRoot, result.v.domRoot.root);
+    result.v.begin();
+    return result.v as UIRoot<E>;
+}
+
+function beginList(r: UIRoot): ListRenderer {
+    let result = imGetNext(r.items);
+    if (!result) {
+        result = imPush(r.items, { t: ITEM_LIST, v: new ListRenderer(r) });
+    }
+
+    // The same hooks must be called in the same order every time
+    if (result.t !== ITEM_LIST) {
+        userError();
+    }
+
+    result.v.begin();
+    r.openListRenderers++;
+
+    return result.v;
+}
+
 class ListRenderer {
     uiRoot: UIRoot;
     builders: UIRoot[] = [];
@@ -344,7 +339,7 @@ class ListRenderer {
         return result;
     }
 
-    finalize() {
+    end() {
         // You should only finalize a list once.
         assert(this.hasBegun);
 
@@ -367,12 +362,12 @@ function newUiRoot<E extends ValidElement>(root: E): UIRoot<E> {
     return result;
 }
 
-function div(root: UIRoot) {
-    return root.el<HTMLDivElement>("div");
+function div(r: UIRoot) {
+    return el<HTMLDivElement>(r, "div");
 }
 
-function span(root: UIRoot) {
-    return root.el<HTMLSpanElement>("span");
+function span(r: UIRoot) {
+    return el<HTMLSpanElement>(r, "span");
 }
 
 function text(r: UIRoot, text: string) {
@@ -386,7 +381,7 @@ function text(r: UIRoot, text: string) {
 function Button(r: UIRoot, buttonText: string, onClick: () => void) {
     const root = div(r);
     {
-        const b = root.el("button");
+        const b = el(root, "button");
         text(b, buttonText);
         b.root.onmousedown = onClick;
     }
@@ -394,13 +389,13 @@ function Button(r: UIRoot, buttonText: string, onClick: () => void) {
     return root;
 }
 
-function Slider(r: UIRoot, labelText: string, onChange: (val: number) => void) {
-    const root = div(r);
+function Slider(root: UIRoot, labelText: string, onChange: (val: number) => void) {
+    const r = div(root);
     {
-        const label = root.el("LABEL").a("for", labelText);
+        const label = el(r, "LABEL").a("for", labelText);
         text(label, labelText);
 
-        const input = root.el<HTMLInputElement>("INPUT")
+        const input = el<HTMLInputElement>(r, "INPUT")
             .s("width", "1000px")
             .a("name", labelText)
             .a("type", "range")
@@ -441,7 +436,7 @@ function App() {
     function renderApp(root: UIRoot) {
         let r = root;
 
-        const appRoot = div(r); r = appRoot;
+        const appRoot = div(r); 
         {
             text(div(r), "Hello world! ");
             text(div(r), "Lets fkng go! ");
@@ -450,7 +445,7 @@ function App() {
         }
         r = root;
 
-        const aList = r.beginList();
+        const aList = beginList(r);
         for (let i = 0; i < count; i++) {
             const r = aList.getNext();
             const s = span(r);
@@ -459,7 +454,7 @@ function App() {
             s.s("display", "inline-block")
                 .s("transform", `translateY(${Math.sin(t + (2 * Math.PI * (i / period))) * 50}px)`);
         }
-        aList.finalize();
+        aList.end();
 
         const buttonBar = div(r); r = buttonBar;
         {
