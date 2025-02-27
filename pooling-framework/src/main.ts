@@ -143,18 +143,22 @@ function imPush<T>(arr: ImmediateModeArray<T>, value: T): T {
     return value;
 }
 
-function imReset(arr: ImmediateModeArray<unknown>) {
+function imLockSize(arr: ImmediateModeArray<unknown>) {
     if (arr.expectedLength === -1) {
         if (arr.idx !== -1) {
             arr.expectedLength = arr.items.length;
         }
-    } else {
+    }
+}
+
+function imReset(arr: ImmediateModeArray<unknown>, idx: number = -1) {
+    if (arr.expectedLength !== -1) {
         // Once an immediate mode array has been finalized, every subsequent render must create the same number of things.
         // In this case, you've rendered too few(?) things.
         assert(arr.expectedLength === arr.items.length);
-    }
+    } 
 
-    arr.idx = -1;
+    arr.idx = idx;
 }
 
 type ValidElement = HTMLElement | SVGElement;
@@ -164,6 +168,7 @@ type StyleObject<U extends ValidElement> = (U extends HTMLElement ? keyof HTMLEl
 const ITEM_UI_ROOT = 1;
 const ITEM_LIST = 2;
 const ITEM_STATE = 3;
+const ITEM_RERENDER_POINT = 4;
 type UIChildRootItem = {
     t: typeof ITEM_UI_ROOT;
     v: UIRoot<ValidElement>;
@@ -176,6 +181,10 @@ type StateItem  = {
     t: typeof ITEM_STATE;
     v: unknown;
 };
+type RerenderPointItem = {
+    t: typeof ITEM_RERENDER_POINT;
+    v: RerenderPoint;
+}
 
 type UIRootItem = UIChildRootItem | ListRendererItem | StateItem;
 
@@ -199,9 +208,17 @@ function setChildAtEl(root: Element, i: number, child: Element) {
     if (i === children.length) {
         root.appendChild(child);
     } else if (children[i] !== child) {
-        // TODO: compare insertBefore performance with replace
+        // TODO: compare insertBefore performance with replaceChild. I reckon insertBefore is faster in most cases
         root.insertBefore(child, children[i]);
     }
+}
+
+type RerenderPoint =  {
+    domRootIdx: number;
+    itemsIdx: number;
+    stylesIdx: number;
+    classesIdx: number;
+    attributesIdx: number;
 }
 
 class UIRoot<E extends ValidElement = ValidElement> {
@@ -230,21 +247,29 @@ class UIRoot<E extends ValidElement = ValidElement> {
     }
 
     // TODO: think of how we can remove this 
-    __begin(idx?: number) {
-        resetDomRoot(this.domRoot, idx);
+    __begin(rp?: RerenderPoint) {
+        resetDomRoot(this.domRoot, rp?.domRootIdx);
 
-        imReset(this.items);
-        imReset(this.classes);
-        imReset(this.styles);
-        imReset(this.attributes);
+        imReset(this.items, rp?.itemsIdx);
+        imReset(this.classes, rp?.classesIdx);
+        imReset(this.styles, rp?.stylesIdx);
+        imReset(this.attributes, rp?.attributesIdx);
 
         // DEV: If this is negative, I fkd up (I decremented this thing too many times) 
         // User: If this is positive, u fked up (You forgot to finalize an open list)
         assert(this.openListRenderers === 0);
     }
 
+    // Only lock the size if we reach the end without the component throwing errors. 
+    __end() {
+        imLockSize(this.items);
+        imLockSize(this.classes);
+        imLockSize(this.styles);
+        imLockSize(this.attributes);
+    }
+
     s<K extends (keyof E["style"])>(key: K, value: string) {
-        return this.setSyle(key, value);
+        this.setSyle(key, value);
     }
 
     setSyle<K extends (keyof E["style"])>(key: K, value: string) {
@@ -262,13 +287,11 @@ class UIRoot<E extends ValidElement = ValidElement> {
             // @ts-expect-error it sure can
             this.root.style[key] = value;
         }
-
-        return this;
     }
 
     // NOTE: the effect of this method will persist accross renders
     c(val: string, enabled: boolean = true) {
-        return this.setClass(val, enabled);
+        this.setClass(val, enabled);
     }
 
     // NOTE: the effect of this method will persist accross renders
@@ -289,16 +312,14 @@ class UIRoot<E extends ValidElement = ValidElement> {
                 this.root.classList.remove(val);
             }
         }
-
-        return this;
     }
 
     attr(attr: string, val: string) {
-        return this.setAttribute(attr, val);
+        this.setAttribute(attr, val);
     }
 
     a(attr: string, val: string) {
-        return this.setAttribute(attr, val);
+        this.setAttribute(attr, val);
     }
 
     setAttribute(attr: string, val: string) {
@@ -318,8 +339,6 @@ class UIRoot<E extends ValidElement = ValidElement> {
                 this.root.removeAttribute(attr);
             }
         }
-
-        return this;
     }
 
     __removeAllDomElements() {
@@ -327,8 +346,18 @@ class UIRoot<E extends ValidElement = ValidElement> {
             const item = this.items.items[i];
             if (item.t === ITEM_UI_ROOT) {
                 item.v.domRoot.root.remove();
+            } else if (item.t === ITEM_LIST) {
+                // needs to be fully recursive. because even though our UI tree is like
+                //
+                // -list
+                //   -list
+                //     -list
+                // 
+                // They're still all rendering to the same DOM root!!!
+                item.v.__removeAllDomElementsFromList();
             }
         }
+        resetDomRoot(this.domRoot);
     }
 }
 
@@ -352,7 +381,7 @@ export function setVisible<T>(r: UIRoot, visibleState: T | null | undefined | fa
     return !!visibleState;
 }
 
-function el<E extends ValidElement = ValidElement>(r: UIRoot, type: string): UIRoot<E> {
+function el<E extends ValidElement = ValidElement>(r: UIRoot, type: string, next?: RenderFn<E>): UIRoot<E> {
     // Don't render new elements to this thing when you have a list renderer that is active!
     // render to that instead.
     assert(r.openListRenderers === 0);
@@ -374,7 +403,13 @@ function el<E extends ValidElement = ValidElement>(r: UIRoot, type: string): UIR
     assert(result.v.type === type);
 
     appendToDomRoot(r.domRoot, result.v.domRoot.root);
+
     result.v.__begin();
+
+    next?.(result.v);
+
+    result.v.__end();
+
     return result.v as UIRoot<E>;
 }
 
@@ -396,6 +431,29 @@ function getState<T>(r: UIRoot, supplier: () => T): T {
     return result.v as T;
 }
 
+function newRerenderPoint(): RerenderPoint {
+    return { domRootIdx: 0, itemsIdx: 0, stylesIdx: 0, classesIdx: 0, attributesIdx: 0 };
+}
+
+const INCLUSIVE = true;
+const EXCLUSIVE = false;
+function getRererenderPoint(r: UIRoot, incusive: boolean): RerenderPoint {
+    const state = getState(r, newRerenderPoint);
+    state.domRootIdx = r.domRoot.currentIdx;
+    state.attributesIdx = r.attributes.idx;
+    state.stylesIdx = r.styles.idx;
+    state.classesIdx = r.classes.idx;
+
+    // If the render function includes the call to `getRenderPoint`, then this should be -1.
+    // If the render function is just before the function we _actually_ want to rerender, then this should be 0
+    if (incusive) {
+        state.itemsIdx = r.items.idx - 1;
+    } else {
+        state.itemsIdx = r.items.idx;
+    }
+    return state;
+}
+
 function beginList(r: UIRoot): ListRenderer {
     let result = imGetNext(r.items);
     if (!result) {
@@ -407,8 +465,7 @@ function beginList(r: UIRoot): ListRenderer {
         userError();
     }
 
-    result.v.begin();
-    r.openListRenderers++;
+    result.v.__begin();
 
     return result.v;
 }
@@ -429,12 +486,13 @@ class ListRenderer {
         this.uiRoot = root;
     }
 
-    begin() {
+    __begin() {
         // DEV: Don't begin a list twice. (A user usually doesn't have to begin a list themselves)
         assert(!this.hasBegun);
 
         this.hasBegun = true;
         this.builderIdx = 0;
+        this.uiRoot.openListRenderers++;
     }
 
     getNext() {
@@ -453,7 +511,9 @@ class ListRenderer {
         }
 
         // Append new list elements to where we're currently appending
-        result.__begin(result.domRoot.currentIdx);
+        const currentDomRootIdx = result.domRoot.currentIdx;
+        result.__begin(undefined);
+        result.domRoot.currentIdx = currentDomRootIdx;
         this.builderIdx++;
 
         return result;
@@ -475,6 +535,14 @@ class ListRenderer {
         }
         this.builders.length = this.builderIdx;
     }
+
+    __removeAllDomElementsFromList() {
+        for (let i = 0; i < this.builders.length; i++) {
+            // don't need to recurse all the way to the bottom
+            this.builders[i].__removeAllDomElements();
+        }
+    }
+
 }
 
 function newUiRoot<E extends ValidElement>(root: E): UIRoot<E> {
@@ -484,16 +552,12 @@ function newUiRoot<E extends ValidElement>(root: E): UIRoot<E> {
 
 type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot) => void;
 
-function div(r: UIRoot, next?: RenderFn<HTMLDivElement>) {
-    const result = el<HTMLDivElement>(r, "div");
-    next?.(result);
-    return result;
+function div(r: UIRoot, next?: RenderFn<HTMLDivElement>): UIRoot<HTMLDivElement> {
+    return el<HTMLDivElement>(r, "div", next);
 }
 
-function span(r: UIRoot, next?: RenderFn<HTMLDivElement>) {
-    const result = el<HTMLSpanElement>(r, "span");
-    next?.(result);
-    return result;
+function span(r: UIRoot, next?: RenderFn<HTMLSpanElement>): UIRoot<HTMLSpanElement> {
+    return el<HTMLSpanElement>(r, "span", next);
 }
 
 function text(r: UIRoot, text: string) {
@@ -526,21 +590,23 @@ function Button(r: UIRoot, buttonText: string, onClick: () => void) {
 }
 
 function Slider(root: UIRoot, labelText: string, onChange: (val: number) => void) {
-    const r = div(root);
-    {
-        const label = el(r, "LABEL").a("for", labelText);
-        text(label, labelText);
+    div(root, r => {
+        el(r, "LABEL", r => {
+            r.a("for", labelText);
+            text(r, labelText);
+        });
 
-        const input = el<HTMLInputElement>(r, "INPUT")
-            .s("width", "1000px")
-            .a("name", labelText)
-            .a("type", "range")
-            .a("min", "1").a("max", "300").a("step", "1");
+        const input = el<HTMLInputElement>(r, "INPUT", r => {
+            r.s("width", "1000px")
+            r.a("name", labelText)
+            r.a("type", "range")
+            r.a("min", "1"); r.a("max", "300"); r.a("step", "1");
+        });
 
         input.root.oninput = () => {
             onChange(input.root.valueAsNumber);
         }
-    }
+    });
 
     return root;
 }
@@ -550,11 +616,12 @@ function canAnimate(r: UIRoot) {
 }
 
 function realtime(r: UIRoot, fn: RenderFn) {
-    let rerenderPoint = r.domRoot.currentIdx;
+    let rerenderPoint = getRererenderPoint(r, EXCLUSIVE);
 
     fn(r);
 
     const animation = getState(r, () => {
+        // TODO: fix
         return newAnimation(() => {
             r.__begin(rerenderPoint);
             fn(r);
@@ -567,9 +634,11 @@ function realtime(r: UIRoot, fn: RenderFn) {
 function WallClock(r: UIRoot) {
     realtime(r, r => {
         const value = getState(r, () => ({ val: 0 }));
+
         value.val += (-0.5 + Math.random()) * 0.02;
         if (value.val > 1) value.val = 1;
         if (value.val < -1) value.val = -1;
+
         div(r, r => {
             text(r, "brownian motion: " + value.val + "");
         });
@@ -582,7 +651,7 @@ function WallClock(r: UIRoot) {
                     text(r, new Date().toISOString());
                 });
             }
-        })
+        });
     });
 }
 
@@ -610,54 +679,87 @@ function App() {
         rerenderApp();
     }
 
-    function renderApp(r: UIRoot) {
-        div(r, r => {
-            text(div(r), "Hello world! ");
-            text(div(r), "Lets fkng go! ");
-            text(div(r), "Count: " + count);
-            text(div(r), "Period: " + period);
+    function renderApp(rIn: UIRoot) {
+        const rerenderPoint = getRererenderPoint(rIn, INCLUSIVE);
+
+        const l = beginList(rIn);
+        const r = l.getNext();
+        const rError = l.getNext();
+
+        try {
+
             div(r, r => {
-                r.isFirstRender && r
-                    .s("height", "5px")
-                    .s("backgroundColor", "black");
-            });
-            div(r, r => {
-                if (r.isFirstRender) {
-                    r.s("padding", "10px")
-                        .s("border", "1px solid black")
-                        .s("display", "inline-block");
-                }
-
-                WallClock(r);
-            })
-        })
-
-        list(r, l => {
-            for (let i = 0; i < 10; i++) {
-                list(r, l => {
-                    for (let i = 0; i < count / 10; i++) {
-                        const r = l.getNext();
-                        span(r, r => {
-                            text(r, "A");
-
-                            r.isFirstRender && r.s("display", "inline-block");
-                            r.s("transform", `translateY(${Math.sin(t + (2 * Math.PI * (i / period))) * 50}px)`);
-                        });
-                    }
+                text(div(r), "Hello world! ");
+                text(div(r), "Lets fkng go! ");
+                text(div(r), "Count: " + count);
+                text(div(r), "Period: " + period);
+                div(r, r => {
+                    r.s("height", "5px");
+                    r.s("backgroundColor", "black");
                 });
-            }
-        });
+                div(r, r => {
+                    r.s("padding", "10px");
+                    r.s("border", "1px solid black");
+                    r.s("display", "inline-block");
 
-        div(r, r => {
-            r.isFirstRender && r
-                .s("position", "fixed")
-                .s("bottom", "10px").s("left", "10px");
+                    if (count < 500) {
+                        throw new Error("The count was way too high my dude");
+                    }
 
-            Slider(r, "period", setPeriod);
-            Button(r, "Increment count", incrementCount);
-            Button(r, "Refresh", refresh);
-            Button(r, "Decrement count", decrementCount);
-        }); 
+                    WallClock(r);
+                })
+            })
+
+            list(r, l => {
+                for (let i = 0; i < 10; i++) {
+                    const r = l.getNext();
+                    list(r, l => {
+                        for (let i = 0; i < count / 10; i++) {
+                            const r = l.getNext();
+                            span(r, r => {
+                                text(r, "A");
+
+                                r.s("display", "inline-block");
+                                r.s("transform", `translateY(${Math.sin(t + (2 * Math.PI * (i / period))) * 50}px)`);
+                            });
+                        }
+                    });
+                }
+            });
+
+            div(r, r => {
+                r.a("style", `position: fixed; bottom: 10px; left: 10px`);
+
+                Slider(r, "period", setPeriod);
+                Button(r, "Increment count", incrementCount);
+                Button(r, "Refresh", refresh);
+                Button(r, "Decrement count", decrementCount);
+            }); 
+        } catch(error) {
+            console.error(error);
+
+            r.__removeAllDomElements();
+
+            div(rError, r => {
+                r.a("style", `display: absolute;top:0;bottom:0;left:0;right:0;`);
+                
+                div(r, r => {
+                    r.a("style", `display: flex; flex-direction: row; align-items: center; justify-content: center;`);
+
+                    div(r, r => text(r, "An error occured"));
+                    div(r, r => text(r, "Click below to retry."));
+                    Button(r, "Retry", () => {
+                        count = 1000;
+                        
+                        rError.__removeAllDomElements();
+                        rIn.__begin(rerenderPoint);
+                        renderApp(rIn);
+                    });
+                });
+            });
+        } finally {
+            l.end();
+        }
     }
 
     return renderApp;
