@@ -4,9 +4,9 @@
 // understandability. It was fun to write. It may not be as fun to use,
 // but I want to see if the lambdas are optimized or not...
 
-import { newAnimation, startAnimation } from "./animation-queue";
-import { assert, userError } from "./assert";
-import { imGetNext, imLockSize, imPush, imReset, newImArray } from "./im-array";
+import { newAnimation, startAnimation } from "src/utils/animation-queue";
+import { assert, userError } from "src/utils/assert";
+import { imGetNext, imLockSize, imPush, imReset, newImArray } from "src/utils/im-array";
 
 
 
@@ -79,8 +79,8 @@ export class UIRoot<E extends ValidElement = ValidElement> {
     openListRenderers = 0;
     hasRealChildren = false;
     manuallyHidden = false;
-    ifStatementOpen = false;
     removed = false;
+    ifStatementOpen = false;
 
     readonly styles = newImArray<[string, string]>();
     readonly classes = newImArray<[string, boolean]>();
@@ -101,6 +101,8 @@ export class UIRoot<E extends ValidElement = ValidElement> {
 
     // TODO: think of how we can remove this, from user code at the very least.
     __begin(rp?: RerenderPoint) {
+        this.removed = false;
+
         resetDomRoot(this.domRoot, rp?.domRootIdx);
 
         imReset(this.items, rp?.itemsIdx);
@@ -112,8 +114,6 @@ export class UIRoot<E extends ValidElement = ValidElement> {
         // User: If this is positive, u fked up (You forgot to finalize an open list)
         assert(this.openListRenderers === 0);
         this.ifStatementOpen = false;
-
-        this.removed = false;
     }
 
     // Only lock the size if we reach the end without the component throwing errors. 
@@ -233,6 +233,10 @@ export class UIRoot<E extends ValidElement = ValidElement> {
     }
 
     __removeAllDomElements() {
+        if (this.removed) {
+            return;
+        }
+
         this.removed = true;
         for (let i = 0; i < this.items.items.length; i++) {
             const item = this.items.items[i];
@@ -293,6 +297,11 @@ export class ListRenderer {
         this.builderIdx++;
 
         return result;
+    }
+
+    next(fn: RenderFn) {
+        const r = this.getNext();
+        fn(r);
     }
 
     end() {
@@ -430,16 +439,12 @@ export function span(r: UIRoot, next?: RenderFn<HTMLSpanElement>): UIRoot<HTMLSp
     return el<HTMLSpanElement>(r, "span", next);
 }
 
-export function If(condition: boolean, r: UIRoot, next: RenderFn) {
+export function If(r: UIRoot, condition: boolean, next: RenderFn) {
     r.ifStatementOpen = true;
-    ElseIf(condition, r, next);
+    ElseIf(r, condition, next);
 }
 
-export function Else(r: UIRoot, next: RenderFn) {
-    ElseIf(true, r, next);
-}
-
-export function ElseIf(condition: boolean, r: UIRoot, next: RenderFn) {
+export function ElseIf(r: UIRoot, condition: boolean, next: RenderFn) {
     list(r, l => {
         if (r.ifStatementOpen && condition) {
             r.ifStatementOpen = false;
@@ -458,7 +463,7 @@ export function text(r: UIRoot, text: string) {
 }
 
 function canAnimate(r: UIRoot) {
-    return !r.removed && !r.manuallyHidden;
+    return !r.manuallyHidden && r.root.isConnected;
 }
 
 // Example usage:
@@ -499,42 +504,9 @@ export function realtime(r: UIRoot, fn: RenderFn) {
     fn(r);
 
     const animation = getState(r, () => {
-        return newAnimation((dt) => {
-            if (!canAnimate(r)) {
-                return false;
-            } 
-
+        return newAnimation(() => {
             rerender();
-            return true;
-        })
-    });
-
-    startAnimation(animation);
-}
-
-export function intermittent(r: UIRoot, fn: RenderFn, ms: number) {
-    const rerender = rerenderFn(r, () => realtime(r, fn));
-
-    const state = getState(r, () => {
-        return { t: 0, ms: 0 };
-    });
-    state.ms = ms;
-
-    fn(r);
-
-    const animation = getState(r, () => {
-        return newAnimation((dt) => {
-            if (!canAnimate(r)) {
-                return false;
-            } 
-
-            state.t += dt;
-            if (state.t > state.ms) {
-                rerender();
-                state.t = 0;
-            }
-
-            return true;
+            return canAnimate(r);
         })
     });
 

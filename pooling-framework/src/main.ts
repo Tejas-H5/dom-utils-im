@@ -1,4 +1,5 @@
-import { div, span, el, getState, rerenderFn, text, UIRoot, list, realtime, errorBoundary, If, ElseIf, newUiRoot } from "./im-dom";
+import { div, span, el, getState, rerenderFn, text, UIRoot, list, realtime, errorBoundary, If, ElseIf, newUiRoot, Else } from "src/utils/im-dom";
+import { getCurrentNumAnimations } from "./utils/animation-queue";
 
 function Button(r: UIRoot, buttonText: string, onClick: () => void) {
     const root = div(r);
@@ -33,7 +34,6 @@ function Slider(root: UIRoot, labelText: string, onChange: (val: number) => void
     return root;
 }
 
-
 function WallClock(r: UIRoot) {
     realtime(r, r => {
         const value = getState(r, () => ({ val: 0 }));
@@ -42,6 +42,9 @@ function WallClock(r: UIRoot) {
         if (value.val > 1) value.val = 1;
         if (value.val < -1) value.val = -1;
 
+        div(r, r => {
+            text(div(r), "Removed: " + r.removed);
+        });
         div(r, r => {
             text(r, "brownian motion: " + value.val + "");
         });
@@ -88,16 +91,24 @@ function App(r: UIRoot) {
     errorBoundary(r, r => {
         div(r, r => {
             text(div(r), "Hello world! ");
-            text(div(r), "Lets fkng go! ");
+            text(div(r), "Lets go! ");
             text(div(r), "Count: " + s.count);
             text(div(r), "Period: " + s.period);
+            realtime(r, r => 
+                text(div(r), "Realtime animations in progress: " + getCurrentNumAnimations())
+            );
+
             // sheesh. cant win with these people...
-            If(r, s.count > 1000, r => {
+            If(s.count > 1000, r, r => {
                 text(div(r), "The count is too damn high!!");
             });
-            ElseIf(r, true, r => {
+            ElseIf(s.count < 1000, r, r => {
                 text(div(r), "The count is too damn low !!");
             });
+            Else(r, r => {
+                text(div(r), "The count is too perfect!!");
+            });
+
             div(r, r => {
                 if (r.isFirstRenderCall) {
                     r.s("height", "5px");
@@ -107,7 +118,6 @@ function App(r: UIRoot) {
 
 
             div(r, r => {
-
                 if (r.isFirstRenderCall) {
                     r.s("padding", "10px");
                     r.s("border", "1px solid black");
@@ -115,10 +125,12 @@ function App(r: UIRoot) {
                 }
 
                 if (s.count < 500) {
-                    throw new Error("The count was way too high my dude");
+                    throw new Error("The count was way too low my dude");
                 }
 
-                WallClock(r);
+                If(s.count < 2000, r, r => {
+                    WallClock(r);
+                })
             })
 
         });
@@ -126,6 +138,7 @@ function App(r: UIRoot) {
         list(r, l => {
             for (let i = 0; i < 10; i++) {
                 const r = l.getNext();
+                // totally redundant list. I'm just testing the framework tho.
                 list(r, l => {
                     for (let i = 0; i < s.count / 10; i++) {
                         const r = l.getNext();
