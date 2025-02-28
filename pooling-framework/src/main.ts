@@ -242,8 +242,10 @@ class UIRoot<E extends ValidElement = ValidElement> {
         this.type = type;
     }
 
+    isFirstRenderCall = true;
+    isSecondRenderCall = false;
     get isFirstRender() {
-        return this.items.expectedLength === -1;
+        return this.isFirstRenderCall;
     }
 
     // TODO: think of how we can remove this 
@@ -262,10 +264,22 @@ class UIRoot<E extends ValidElement = ValidElement> {
 
     // Only lock the size if we reach the end without the component throwing errors. 
     __end() {
-        imLockSize(this.items);
-        imLockSize(this.classes);
-        imLockSize(this.styles);
-        imLockSize(this.attributes);
+        if (this.isFirstRenderCall) {
+            imLockSize(this.items);
+            this.isFirstRenderCall = false;
+            this.isSecondRenderCall = true;
+            return;
+        }
+
+        if (this.isSecondRenderCall) {
+            // Allow setting these on the first render call without contributing to the immediate mode array.
+
+            imLockSize(this.classes);
+            imLockSize(this.styles);
+            imLockSize(this.attributes);
+            this.isSecondRenderCall = false;
+            return;
+        }
     }
 
     s<K extends (keyof E["style"])>(key: K, value: string) {
@@ -273,6 +287,11 @@ class UIRoot<E extends ValidElement = ValidElement> {
     }
 
     setSyle<K extends (keyof E["style"])>(key: K, value: string) {
+        if (this.isFirstRenderCall) {
+            this.root.style.setProperty(key as string, value);
+            return;
+        }
+
         let result = imGetNext(this.styles);
         if (!result) {
             result = imPush(this.styles, [key as string, ""]);
@@ -285,7 +304,7 @@ class UIRoot<E extends ValidElement = ValidElement> {
             result[1] = value;
 
             // @ts-expect-error it sure can
-            this.root.style[key] = value;
+            this.root.style.setProperty(key, value);
         }
     }
 
@@ -296,6 +315,15 @@ class UIRoot<E extends ValidElement = ValidElement> {
 
     // NOTE: the effect of this method will persist accross renders
     setClass(val: string, enabled: boolean = true) {
+        if (this.isFirstRenderCall) {
+            if (enabled) {
+                this.root.classList.add(val);
+            } else {
+                this.root.classList.remove(val);
+            }
+            return;
+        }
+
         let existing = imGetNext(this.classes);
         if (!existing) {
             existing = imPush(this.classes, [val, false]);
@@ -323,6 +351,15 @@ class UIRoot<E extends ValidElement = ValidElement> {
     }
 
     setAttribute(attr: string, val: string) {
+        if (this.isFirstRenderCall) {
+            if (val !== null) {
+                this.root.setAttribute(attr, val);
+            } else {
+                this.root.removeAttribute(attr);
+            }
+            return;
+        }
+
         let existing = imGetNext(this.attributes);
         if (!existing) {
             existing = imPush(this.attributes, [attr, null]);
@@ -357,7 +394,6 @@ class UIRoot<E extends ValidElement = ValidElement> {
                 item.v.__removeAllDomElementsFromList();
             }
         }
-        resetDomRoot(this.domRoot);
     }
 }
 
@@ -406,7 +442,7 @@ function el<E extends ValidElement = ValidElement>(r: UIRoot, type: string, next
 
     result.v.__begin();
 
-    next?.(result.v);
+    next?.(result.v as UIRoot<E>);
 
     result.v.__end();
 
@@ -437,18 +473,17 @@ function newRerenderPoint(): RerenderPoint {
 
 const INCLUSIVE = true;
 const EXCLUSIVE = false;
-function getRererenderPoint(r: UIRoot, incusive: boolean): RerenderPoint {
+function getRererenderPoint(r: UIRoot, inclusive: boolean): RerenderPoint {
     const state = getState(r, newRerenderPoint);
     state.domRootIdx = r.domRoot.currentIdx;
     state.attributesIdx = r.attributes.idx;
     state.stylesIdx = r.styles.idx;
     state.classesIdx = r.classes.idx;
-
-    // If the render function includes the call to `getRenderPoint`, then this should be -1.
-    // If the render function is just before the function we _actually_ want to rerender, then this should be 0
-    if (incusive) {
+    if (inclusive) {
+        // This render function will reset to where getRererenderPoint was called, so that it may be called again in the rerender.
         state.itemsIdx = r.items.idx - 1;
     } else {
+        // This render function will reset to after where getRererenderPoint was called, so that it won't be called in the rerender.
         state.itemsIdx = r.items.idx;
     }
     return state;
@@ -536,6 +571,7 @@ class ListRenderer {
         this.builders.length = this.builderIdx;
     }
 
+    // kinda have to assume that it's valid to remove these elements.
     __removeAllDomElementsFromList() {
         for (let i = 0; i < this.builders.length; i++) {
             // don't need to recurse all the way to the bottom
@@ -550,7 +586,8 @@ function newUiRoot<E extends ValidElement>(root: E): UIRoot<E> {
     return result;
 }
 
-type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot) => void;
+type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot<T>) => void;
+type RenderFnArgs<A extends unknown[], T extends ValidElement = ValidElement> = (r: UIRoot<T>, ...args: A) => void;
 
 function div(r: UIRoot, next?: RenderFn<HTMLDivElement>): UIRoot<HTMLDivElement> {
     return el<HTMLDivElement>(r, "div", next);
@@ -616,18 +653,18 @@ function canAnimate(r: UIRoot) {
 }
 
 function realtime(r: UIRoot, fn: RenderFn) {
-    let rerenderPoint = getRererenderPoint(r, EXCLUSIVE);
+    const rerenderPoint = getRererenderPoint(r, INCLUSIVE);
 
     fn(r);
 
     const animation = getState(r, () => {
-        // TODO: fix
         return newAnimation(() => {
             r.__begin(rerenderPoint);
-            fn(r);
+            realtime(r, fn);
             return canAnimate(r);
         })
     });
+
     startAnimation(animation);
 }
 
@@ -655,121 +692,143 @@ function WallClock(r: UIRoot) {
     });
 }
 
-function App() {
-    let t = 0;
-    let count = 100;
-    let period = 2;
+function errorBoundary(
+    rIn: UIRoot,
+    renderFnNormal: RenderFn,
+    renderFnError: RenderFnArgs<[unknown, () => void]>,
+) {
+    const rerenderPoint = getRererenderPoint(rIn, INCLUSIVE);
 
-    function setPeriod(val: number) {
-        period = val;
-        rerenderApp();
+    const l = beginList(rIn);
+    const r = l.getNext();
+    const rError = l.getNext();
+
+    const recover = () => {
+        rError.__removeAllDomElements();
+        rIn.__begin(rerenderPoint);
+        errorBoundary(rIn, renderFnNormal, renderFnError);
+    };
+
+    try {
+        renderFnNormal(r);
+    } catch (error) {
+        r.__removeAllDomElements();
+        resetDomRoot(r.domRoot);
+
+        renderFnError(r, error, recover);
+    } finally {
+        l.end();
+    }
+}
+
+function App(r: UIRoot) {
+    const rerenderPoint = getRererenderPoint(r, INCLUSIVE);
+    const rerender = () => {
+        r.__begin(rerenderPoint);
+        App(r);
     }
 
-    function refresh() {
-        rerenderApp();
-    }
+    const s = getState(r, () => ({
+        t: 0,
+        count: 1,
+        incrementValue: 1,
+        period: 2,
+        setPeriod(val: number) {
+            s.period = val;
+            rerender();
+        },
+        setIncrement(val: number) {
+            s.incrementValue = val;
+            rerender();
+        },
+        incrementCount() {
+            s.count += s.incrementValue;
+            rerender();
+        },
+        decrementCount() {
+            s.count -= s.incrementValue;
+            rerender();
+        }
+    }));
 
-    function incrementCount() {
-        count += 1000;
-        rerenderApp();
-    }
-
-    function decrementCount() {
-        count -= 1000;
-        rerenderApp();
-    }
-
-    function renderApp(rIn: UIRoot) {
-        const rerenderPoint = getRererenderPoint(rIn, INCLUSIVE);
-
-        const l = beginList(rIn);
-        const r = l.getNext();
-        const rError = l.getNext();
-
-        try {
-
+    errorBoundary(r, r => {
+        div(r, r => {
+            text(div(r), "Hello world! ");
+            text(div(r), "Lets fkng go! ");
+            text(div(r), "Count: " + s.count);
+            text(div(r), "Period: " + s.period);
             div(r, r => {
-                text(div(r), "Hello world! ");
-                text(div(r), "Lets fkng go! ");
-                text(div(r), "Count: " + count);
-                text(div(r), "Period: " + period);
-                div(r, r => {
+                if (r.isFirstRenderCall) {
                     r.s("height", "5px");
                     r.s("backgroundColor", "black");
-                });
-                div(r, r => {
+                }
+            });
+            div(r, r => {
+                if (r.isFirstRenderCall) {
                     r.s("padding", "10px");
                     r.s("border", "1px solid black");
                     r.s("display", "inline-block");
-
-                    if (count < 500) {
-                        throw new Error("The count was way too high my dude");
-                    }
-
-                    WallClock(r);
-                })
-            })
-
-            list(r, l => {
-                for (let i = 0; i < 10; i++) {
-                    const r = l.getNext();
-                    list(r, l => {
-                        for (let i = 0; i < count / 10; i++) {
-                            const r = l.getNext();
-                            span(r, r => {
-                                text(r, "A");
-
-                                r.s("display", "inline-block");
-                                r.s("transform", `translateY(${Math.sin(t + (2 * Math.PI * (i / period))) * 50}px)`);
-                            });
-                        }
-                    });
                 }
-            });
+
+                if (s.count < 500) {
+                    // throw new Error("The count was way too high my dude");
+                }
+
+                WallClock(r);
+            })
+        });
+
+        list(r, l => {
+            for (let i = 0; i < 10; i++) {
+                const r = l.getNext();
+                list(r, l => {
+                    for (let i = 0; i < s.count / 10; i++) {
+                        const r = l.getNext();
+                        span(r, r => {
+                            text(r, "A");
+
+                            r.isFirstRenderCall && r.s("display", "inline-block");
+                            r.s("transform", `translateY(${Math.sin(s.t + (2 * Math.PI * (i / s.period))) * 50}px)`);
+                        });
+                    }
+                });
+            }
+        });
+
+        div(r, r => {
+            r.isFirstRenderCall && r.a("style", `position: fixed; bottom: 10px; left: 10px`);
+
+            Slider(r, "period", s.setPeriod);
+            Slider(r, "increment", s.setIncrement);
+            Button(r, "Increment count", s.incrementCount);
+            Button(r, "Refresh", rerender);
+            Button(r, "Decrement count", s.decrementCount);
+        });
+    }, (rError, error, recover) => {
+        console.error(error);
+
+        div(rError, r => {
+            r.isFirstRenderCall && r.a("style", `display: absolute;top:0;bottom:0;left:0;right:0;`);
 
             div(r, r => {
-                r.a("style", `position: fixed; bottom: 10px; left: 10px`);
+                r.a("style", `display: flex; flex-direction: row; align-items: center; justify-content: center;`);
 
-                Slider(r, "period", setPeriod);
-                Button(r, "Increment count", incrementCount);
-                Button(r, "Refresh", refresh);
-                Button(r, "Decrement count", decrementCount);
-            }); 
-        } catch(error) {
-            console.error(error);
+                div(r, r => text(r, "An error occured"));
+                div(r, r => text(r, "Click below to retry."));
+                Button(r, "Retry", () => {
+                    s.count = 1000;
 
-            r.__removeAllDomElements();
-
-            div(rError, r => {
-                r.a("style", `display: absolute;top:0;bottom:0;left:0;right:0;`);
-                
-                div(r, r => {
-                    r.a("style", `display: flex; flex-direction: row; align-items: center; justify-content: center;`);
-
-                    div(r, r => text(r, "An error occured"));
-                    div(r, r => text(r, "Click below to retry."));
-                    Button(r, "Retry", () => {
-                        count = 1000;
-                        
-                        rError.__removeAllDomElements();
-                        rIn.__begin(rerenderPoint);
-                        renderApp(rIn);
-                    });
+                    recover();
                 });
             });
-        } finally {
-            l.end();
-        }
-    }
-
-    return renderApp;
+        });
+    })
 }
-
 
 const appRoot = newUiRoot(document.body);
 
 function rerenderApp() { 
-    component(appRoot, App);
+    App(appRoot);
 }
 
 rerenderApp();
