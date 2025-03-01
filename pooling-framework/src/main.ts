@@ -1,19 +1,17 @@
-import { div, span, el, getState, rerenderFn, text, UIRoot, list, realtime, errorBoundary, If, ElseIf, newUiRoot, Else } from "src/utils/im-dom";
+import { on, div, el, getState, rerenderFn, text, UIRoot, list, realtime, errorBoundary, If, ElseIf, newUiRoot, Else, getUnsafeState } from "src/utils/im-dom";
 import { getCurrentNumAnimations } from "./utils/animation-queue";
 
 function Button(r: UIRoot, buttonText: string, onClick: () => void) {
-    const root = div(r);
-    {
-        const b = el(root, "button");
+    return div(r, r => {
+        const b = el(r, "button", r => {
+            on(r, "click", onClick);
+        });
         text(b, buttonText);
-        b.root.onmousedown = onClick;
-    }
-
-    return root;
+    });
 }
 
-function Slider(root: UIRoot, labelText: string, onChange: (val: number) => void) {
-    div(root, r => {
+function Slider(r: UIRoot, labelText: string, onChange: (val: number) => void) {
+    return div(r, r => {
         el(r, "LABEL", r => {
             r.a("for", labelText);
             text(r, labelText);
@@ -24,19 +22,20 @@ function Slider(root: UIRoot, labelText: string, onChange: (val: number) => void
             r.a("name", labelText)
             r.a("type", "range")
             r.a("min", "1"); r.a("max", "300"); r.a("step", "1");
+            on(r, "input", () => {
+                onChange(input.root.valueAsNumber);
+            });
         });
-
-        input.root.oninput = () => {
-            onChange(input.root.valueAsNumber);
-        }
     });
+}
 
-    return root;
+function newWallClockState() {
+    return { val: 0 };
 }
 
 function WallClock(r: UIRoot) {
-    realtime(r, r => {
-        const value = getState(r, () => ({ val: 0 }));
+    realtime(r, (r, dt) => {
+        const value = getState(r, newWallClockState);
 
         value.val += (-0.5 + Math.random()) * 0.02;
         if (value.val > 1) value.val = 1;
@@ -47,6 +46,9 @@ function WallClock(r: UIRoot) {
         });
         div(r, r => {
             text(r, "brownian motion: " + value.val + "");
+        });
+        div(r, r => {
+            text(r, "FPS: " + (1 / dt).toPrecision(2) + "");
         });
         list(r, l => {
             let n = value.val < 0 ? 1 : 2;
@@ -61,35 +63,79 @@ function WallClock(r: UIRoot) {
     });
 }
 
+function resize(values: number[][], gridRows: number, gridCols: number) {
+    while (values.length < gridRows) {
+        values.push([]);
+    }
+    while (values.length > gridRows) {
+        values.pop();
+    }
+
+    for (let i = 0; i < values.length; i++) {
+        const row = values[i];
+        while (row.length < gridCols) {
+            row.push(0);
+        }
+        while (row.length > gridCols) {
+            row.pop();
+        }
+    }
+}
+
+function newAppState() {
+    const s = {
+        rerender: () => {},
+
+        period: 2,
+        setPeriod(val: number) {
+            s.period = val;
+            s.rerender();
+        },
+        incrementValue: 1,
+        setIncrement(val: number) {
+            s.incrementValue = val;
+            s.rerender();
+        },
+        count: 1,
+        incrementCount() {
+            s.count += s.incrementValue;
+            s.rerender();
+        },
+        decrementCount() {
+            s.count -= s.incrementValue;
+            s.rerender();
+        },
+        grid: true,
+        toggleGrid() {
+            s.grid = !s.grid;
+            s.rerender();
+        }
+    }
+
+    return s;
+}
+
+function newGridState() {
+    let gridRows = 100;
+    let gridCols = 400;
+    const values: number[][] = [];
+
+    resize(values, gridRows, gridCols);
+
+    return { gridRows, gridCols, values };
+}
 
 function App(r: UIRoot) {
     const rerender = rerenderFn(r, () => App(r));
 
-    const s = getState(r, () => ({
-        t: 0,
-        count: 1,
-        incrementValue: 1,
-        period: 2,
-        setPeriod(val: number) {
-            s.period = val;
-            rerender();
-        },
-        setIncrement(val: number) {
-            s.incrementValue = val;
-            rerender();
-        },
-        incrementCount() {
-            s.count += s.incrementValue;
-            rerender();
-        },
-        decrementCount() {
-            s.count -= s.incrementValue;
-            rerender();
-        }
-    }));
+    const s = getState(r, newAppState);
+    s.rerender = rerender;
 
     errorBoundary(r, r => {
         div(r, r => {
+            Button(r, "Click me!", () => {
+                alert("noo");
+            });
             text(div(r), "Hello world! ");
             text(div(r), "Lets go! ");
             text(div(r), "Count: " + s.count);
@@ -135,6 +181,7 @@ function App(r: UIRoot) {
 
         });
 
+        /**
         list(r, l => {
             for (let i = 0; i < 10; i++) {
                 const r = l.getNext();
@@ -152,12 +199,64 @@ function App(r: UIRoot) {
                 });
             }
         });
+        */
+
+        If(s.grid, r, r => {
+            const gridState = getState(r, newGridState);
+
+            realtime(r, (r, dt) => {
+                const { values } = gridState;
+
+                for (let i = 0; i < values.length; i++) {
+                    for (let j = 0; j < values[i].length; j++) {
+                        if (values[i][j] > 0) {
+                            values[i][j] -= dt;
+                        }
+                        if (values[i][j] < 0) {
+                            values[i][j] = 0;
+                        }
+                    }
+                }
+
+                list(r, l => {
+                    for (let i = 0; i < values.length; i++) {
+                        const r = l.getNext();
+                        div(r, r => {
+                            if (r.isFirstRender) {
+                                r.s("display", "flex");
+                            }
+
+                            list(r, l => {
+                                for (let j = 0; j < values[i].length; j++) {
+                                    const r = l.getNext();
+                                    div(r, r => {
+                                        if (r.isFirstRender) {
+                                            r.s("display", "inline-block");
+                                            r.s("width", "5px");
+                                            r.s("height", "5px");
+                                        }
+
+                                        r.s("backgroundColor", `rgba(0, 0, 0, ${values[i][j] + 0.1})`);
+
+                                        on(r, "mousemove", () => {
+                                            values[i][j] = 1;
+                                            rerender();
+                                        });
+                                    });
+                                }
+                            })
+                        })
+                    }
+                })
+            });
+        })
 
         div(r, r => {
             r.isFirstRenderCall && r.a("style", `position: fixed; bottom: 10px; left: 10px`);
 
             Slider(r, "period", s.setPeriod);
             Slider(r, "increment", s.setIncrement);
+            Button(r, "Toggle grid", s.toggleGrid);
             Button(r, "Increment count", s.incrementCount);
             Button(r, "Refresh", rerender);
             Button(r, "Decrement count", s.decrementCount);

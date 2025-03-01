@@ -8,8 +8,6 @@ import { newAnimation, startAnimation } from "src/utils/animation-queue";
 import { assert, userError } from "src/utils/assert";
 import { imGetNext, imLockSize, imPush, imReset, newImArray } from "src/utils/im-array";
 
-
-
 export type ValidElement = HTMLElement | SVGElement;
 export type StyleObject<U extends ValidElement> = (U extends HTMLElement ? keyof HTMLElement["style"] : keyof SVGElement["style"]);
 
@@ -95,6 +93,12 @@ export class UIRoot<E extends ValidElement = ValidElement> {
 
     isFirstRenderCall = true;
     isSecondRenderCall = false;
+    /** 
+     * NOTE: Don't rely on this to initialize state, or set up event handlers - 
+     * if the component errors, this can be true for every rerender untill the component
+     * stops throwing errors in it's render function.
+     * For simple styling and other idempotent actions, it's fine.
+     */
     get isFirstRender() {
         return this.isFirstRenderCall;
     }

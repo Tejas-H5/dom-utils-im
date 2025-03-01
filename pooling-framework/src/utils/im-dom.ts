@@ -4,7 +4,7 @@
 // understandability. It was fun to write. It may not be as fun to use,
 // but I want to see if the lambdas are optimized or not...
 
-import { newAnimation, startAnimation } from "./animation-queue";
+import { newAnimation, RealtimeAnimation, startAnimation } from "./animation-queue";
 import { assert, userError } from "./assert";
 import { imGetNext, imLockSize, imPush, imReset, newImArray } from "./im-array";
 
@@ -29,6 +29,7 @@ export type ListRendererItem = {
 export type StateItem  = {
     t: typeof ITEM_STATE;
     v: unknown;
+    supplier: () => unknown;
 };
 export type RerenderPointItem = {
     t: typeof ITEM_RERENDER_POINT;
@@ -158,7 +159,7 @@ export class UIRoot<E extends ValidElement = ValidElement> {
             result[1] = value;
 
             // @ts-expect-error it sure can
-            this.root.style.setProperty(key, value);
+            this.root.style[key] = value;
         }
     }
 
@@ -232,6 +233,9 @@ export class UIRoot<E extends ValidElement = ValidElement> {
         }
     }
 
+    // NOTE: If this is being called before we've rendered any components here, it should be ok.
+    // if it's being called during a render, then that is typically an incorrect usage - the domRoot's index may or may not be incorrect now, because
+    // we will have removed HTML elements out from underneath it. You'll need to ensure that this isn't happening in your use case.
     __removeAllDomElements() {
         this.removed = true;
         for (let i = 0; i < this.items.items.length; i++) {
@@ -305,7 +309,7 @@ export class ListRenderer {
         assert(this.uiRoot.openListRenderers > 0);
         this.uiRoot.openListRenderers--;
 
-        // remove all the UI components that may have been added by other builders.
+        // remove all the UI components that may have been added by other builders in the previous render.
         for (let i = this.builderIdx; i < this.builders.length; i++) {
             this.builders[i].__removeAllDomElements();
         }
@@ -315,7 +319,6 @@ export class ListRenderer {
     // kinda have to assume that it's valid to remove these elements.
     __removeAllDomElementsFromList() {
         for (let i = 0; i < this.builders.length; i++) {
-            // don't need to recurse all the way to the bottom
             this.builders[i].__removeAllDomElements();
         }
     }
@@ -372,22 +375,58 @@ export function getRererenderPoint(r: UIRoot, offset: number): RerenderPoint {
 
 ///////// Common immediate mode UI helpers
 
-export function getState<T>(r: UIRoot, supplier: () => T): T {
+function getStateIntenal<T>(r: UIRoot, supplier: () => T, skipSupplierCheck: boolean): T {
     // Don't render new elements to this thing when you have a list renderer that is active!
     // render to that instead.
     assert(r.openListRenderers === 0);
 
     let result = imGetNext(r.items);
     if (!result) {
-        result = imPush(r.items, { t: ITEM_STATE, v: supplier() });
+        result = imPush(r.items, { t: ITEM_STATE, v: supplier(), supplier });
     } else {
         if (result.t !== ITEM_STATE) {
             // The same hooks must be called in the same order every time
             userError();
         }
+
+        if (!skipSupplierCheck && supplier !== result.supplier) {
+            // The same hooks must be called in the same order every time.
+            // If you have two hooks for the same kind of state but in a different order, this assertion won't catch that bug.
+            // but I doubt you would ever be writing code like that...
+            userError();
+        }
     }
 
     return result.v as T;
+}
+
+/**
+ * This method returns a stable reference to some state, allowing your component to maintain
+ * state between rerenders. This only works because of the 'rules of immediate mode state' idea
+ * this framework is built upon, which are basically the same as the 'rule of hooks' from React,
+ * except it extends to all immediate mode state that we want to persist and reuse between rerenders, 
+ * including ui components.
+ *
+ * This method expects that you pass in the same supplier every time.
+ * This catches out-of-order hook rendering bugs, so it's better to use this where possible. 
+ *
+ * Sometimes, it is just way easier to do the state inline:
+ * ```
+ *      const s = getState(r, () => { ... some state } );
+ * ```
+ *
+ * In which case, you'll need to use getDynamicState instead. But try not to!
+ */
+export function getState<T>(r: UIRoot, supplier: () => T): T {
+    return getStateIntenal(r, supplier, false);
+}
+
+/**
+ * WARNING: using this method won't allow you to catch out-of-order hook-rendering bugs at runtime, 
+ * leading to potential data corruption. use this at your own peril.
+ */
+export function getUnsafeState<T>(r: UIRoot, supplier: () => T): T {
+    return getStateIntenal(r, supplier, true);
 }
 
 export function el<E extends ValidElement = ValidElement>(r: UIRoot, type: string, next?: RenderFn<E>): UIRoot<E> {
@@ -414,6 +453,19 @@ export function el<E extends ValidElement = ValidElement>(r: UIRoot, type: strin
     appendToDomRoot(r.domRoot, result.v.domRoot.root);
 
     result.v.__begin();
+
+    // The lambda API only exists because we can't shadow a variable with an expresion that uses itself.
+    // i.e if we could do something like this:
+    //
+    // ```
+    // const r = div(r);
+    // r.begin(); {
+    //      r = div(r);
+    // }
+    // r.end();
+    //
+    // Then I would.
+    // ```
 
     next?.(result.v as UIRoot<E>);
 
@@ -461,7 +513,10 @@ function canAnimate(r: UIRoot) {
     return !r.removed && !r.manuallyHidden;
 }
 
-// Example usage:
+// The `rerender` method resets `r`'s current immediate mode state index to 1 before the call to `rerenderFn`, and the invokes
+// the render method you passed in. It relies on the fact that every render method will always generate the same number of immediate
+// mode state entries each time, so we can reliably just reset some indicies to what they were before we called them, and then 
+// simply call them again:
 //
 // ```
 // function App(r: UIRoot) {
@@ -470,9 +525,6 @@ function canAnimate(r: UIRoot) {
 //
 // ```
 //
-// The `rerender` method resets `r`'s current immediate mode state index to 1 before the call to `rerenderFn`, and the invokes
-// the render method you passed in. It relies on the fact that every render method will always generate the same number of immediate
-// mode state entries each time, so we can reliably just reset some indicies and then call the method.
 // It won't work if you don't call things in the right order. Here's an example that will fail:
 //
 // ```
@@ -482,7 +534,8 @@ function canAnimate(r: UIRoot) {
 // }
 // ```
 //
-// This is because when we generate `rerender`, the correct immediate mode index is actually one off. 
+// This is because when we generate `rerender`, getState will have bumped the immedate mode index up by 1, so 
+// the index we store will be one higher than what was correct if we wanted to call IWillThrowAnError(r) on the root again.
 export function rerenderFn(r: UIRoot, fn: RenderFn) {
     const rerenderPoint = getRererenderPoint(r, FROM_HERE);
     const rerender = () => {
@@ -493,37 +546,50 @@ export function rerenderFn(r: UIRoot, fn: RenderFn) {
     return rerender;
 }
 
-export function realtime(r: UIRoot, fn: RenderFn) {
+function realtimeState(): {
+    dt: number;
+    animation: RealtimeAnimation | null;
+} { 
+    return { 
+        dt: 0, 
+        animation: null,
+    };
+}
+
+export function realtime(r: UIRoot, fn: RenderFnArgs<[number]>) {
     const rerender = rerenderFn(r, () => realtime(r, fn));
 
-    fn(r);
-
-    const animation = getState(r, () => {
-        return newAnimation((dt) => {
+    const state = getState(r, realtimeState);
+    if (!state.animation) {
+        state.animation = newAnimation((dt) => {
             if (!canAnimate(r)) {
                 return false;
             } 
 
+            state.dt = dt;
             rerender();
             return true;
-        })
-    });
+        });
+    }
 
-    startAnimation(animation);
+    fn(r, state.dt);
+
+    startAnimation(state.animation);
+}
+
+function newIntermittentState() : {
+    t: number; ms: number; animation: RealtimeAnimation | null;
+} { 
+    return { t: 0, ms: 0 , animation: null };
 }
 
 export function intermittent(r: UIRoot, fn: RenderFn, ms: number) {
     const rerender = rerenderFn(r, () => realtime(r, fn));
 
-    const state = getState(r, () => {
-        return { t: 0, ms: 0 };
-    });
+    const state = getState(r, newIntermittentState);
     state.ms = ms;
-
-    fn(r);
-
-    const animation = getState(r, () => {
-        return newAnimation((dt) => {
+    if (!state.animation) {
+        state.animation = newAnimation((dt) => {
             if (!canAnimate(r)) {
                 return false;
             } 
@@ -535,10 +601,12 @@ export function intermittent(r: UIRoot, fn: RenderFn, ms: number) {
             }
 
             return true;
-        })
-    });
+        });
+    }
 
-    startAnimation(animation);
+    fn(r);
+
+    startAnimation(state.animation);
 }
 
 
@@ -562,6 +630,7 @@ export function errorBoundary(
         renderFnNormal(r);
     } catch (error) {
         r.__removeAllDomElements();
+        // need to reset the dom root, since we've just removed elements underneath it
         resetDomRoot(r.domRoot);
 
         renderFnError(rError, error, recover);
@@ -569,3 +638,36 @@ export function errorBoundary(
         l.end();
     }
 }
+
+function newEventHandlerRef<K extends keyof HTMLElementEventMap>(): {
+    val: null | ((ev: HTMLElementEventMap[K]) => any);
+}{
+    return { val: null };
+}
+
+/**
+ * Seems like simply doing r.root.onwhatever = () => { blah } destroys performance,
+ * so this  method exists now...
+ */
+export function on<K extends keyof HTMLElementEventMap>(
+    r: UIRoot,
+    type: K,
+    listener: (this: HTMLElement, ev: HTMLElementEventMap[K]) => any,
+    options?: boolean | AddEventListenerOptions
+) {
+    const handler = getState(r, newEventHandlerRef as (typeof newEventHandlerRef<K>));
+    if (handler.val === null) {
+        handler.val = listener;
+        r.root.addEventListener(type, (e) => {
+            assert(handler.val);
+
+            // @ts-expect-error I don't have the typescript skill to explain to typescript why this is actually fine.
+            handler.val!(e);
+        }, options);
+    } else {
+        handler.val = listener;
+    }
+}
+
+
+
