@@ -1,9 +1,24 @@
-import { on, div, el, getState, rerenderFn, text, UIRoot, list, realtime, errorBoundary, If, ElseIf, newUiRoot, Else, getUnsafeState } from "src/utils/im-dom";
-import { getCurrentNumAnimations } from "./utils/animation-queue";
+import { 
+    getCurrentNumAnimations, 
+    on, 
+    div, el, getState, rerenderFn, text, UIRoot, list, realtime, errorBoundary, If, ElseIf, newUiRoot, Else, 
+} from "src/utils/im-dom-utils";
+
+function newButton() {
+     return document.createElement("button");
+}
+
+function newLabel() {
+    return document.createElement("label");
+}
+
+function newInput() {
+    return document.createElement("input");
+}
 
 function Button(r: UIRoot, buttonText: string, onClick: () => void) {
     return div(r, r => {
-        const b = el(r, "button", r => {
+        const b = el(r, newButton, r => {
             on(r, "click", onClick);
         });
         text(b, buttonText);
@@ -12,12 +27,12 @@ function Button(r: UIRoot, buttonText: string, onClick: () => void) {
 
 function Slider(r: UIRoot, labelText: string, onChange: (val: number) => void) {
     return div(r, r => {
-        el(r, "LABEL", r => {
+        el(r, newLabel, r => {
             r.a("for", labelText);
             text(r, labelText);
         });
 
-        const input = el<HTMLInputElement>(r, "INPUT", r => {
+        const input = el<HTMLInputElement>(r, newInput, r => {
             r.s("width", "1000px")
             r.a("name", labelText)
             r.a("type", "range")
@@ -74,7 +89,7 @@ function resize(values: number[][], gridRows: number, gridCols: number) {
     for (let i = 0; i < values.length; i++) {
         const row = values[i];
         while (row.length < gridCols) {
-            row.push(0);
+            row.push(1);
         }
         while (row.length > gridCols) {
             row.pop();
@@ -207,17 +222,6 @@ function App(r: UIRoot) {
             realtime(r, (r, dt) => {
                 const { values } = gridState;
 
-                for (let i = 0; i < values.length; i++) {
-                    for (let j = 0; j < values[i].length; j++) {
-                        if (values[i][j] > 0) {
-                            values[i][j] -= dt;
-                        }
-                        if (values[i][j] < 0) {
-                            values[i][j] = 0;
-                        }
-                    }
-                }
-
                 list(r, l => {
                     for (let i = 0; i < values.length; i++) {
                         const r = l.getNext();
@@ -236,11 +240,21 @@ function App(r: UIRoot) {
                                             r.s("height", "5px");
                                         }
 
-                                        r.s("backgroundColor", `rgba(0, 0, 0, ${values[i][j] + 0.1})`);
+                                        // NOTE: usually you would do this with a CSS transition if you cared about performance, but
+                                        // I'm just trying out some random stuff.
+                                        let val = values[i][j];
+                                        if (val > 0) {
+                                            val -= dt;
+                                            if (val < 0) {
+                                                val = 0;
+                                            }
+                                            values[i][j] = val;
+                                            r.s("backgroundColor", `rgba(0, 0, 0, ${val})`);
+                                        }
 
                                         on(r, "mousemove", () => {
                                             values[i][j] = 1;
-                                            rerender();
+                                            // rerender();
                                         });
                                     });
                                 }
@@ -282,7 +296,7 @@ function App(r: UIRoot) {
     })
 }
 
-const appRoot = newUiRoot(document.body);
+const appRoot = newUiRoot(() => document.body);
 
 function rerenderApp() { 
     App(appRoot);
