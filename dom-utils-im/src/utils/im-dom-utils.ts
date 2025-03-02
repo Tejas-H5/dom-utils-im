@@ -1,3 +1,8 @@
+// *IM* DOM-utils v0.1.0001 - @Tejas-H5
+// A variation on DOM-utils with the immediate-mode API isntead of the normal one. I'm still deciding which one I will continue to use.
+// Right now, this one seems better, but the other one has a 'proven' track record of actually working.
+// But in a matter of hours/days, I was able to implement features in this framework that I wasn't able to for months/years in the other one...
+
 //////////
 // Assertion functions
 
@@ -32,8 +37,6 @@ function devError(): never {
     throw new Error("Dev error");
 }
 
-// *IM* DOM-utils v0.1.0001 - @Tejas-H5
-// A variation on DOM-utils with the immediate-mode API isntead of the other one. 
 
 //////////
 // initialize the 'framework'
@@ -55,7 +58,7 @@ export function initializeDomUtils(stylesRoot: HTMLElement) {
         stlyeStringBuilder.length = 0;
 
         const styleNode = newStyleElement();
-        styleNode.type = "text/css";
+        styleNode.setAttribute("type", "text/css");
         styleNode.textContent = "\n\n" + text + "\n\n";
         stylesRoot.append(styleNode);
     }
@@ -563,7 +566,6 @@ export type StyleObject<U extends ValidElement> = (U extends HTMLElement ? keyof
 const ITEM_UI_ROOT = 1;
 const ITEM_LIST = 2;
 const ITEM_STATE = 3;
-const ITEM_RERENDER_POINT = 4;
 export type UIChildRootItem = {
     t: typeof ITEM_UI_ROOT;
     v: UIRoot<ValidElement>;
@@ -577,10 +579,6 @@ export type StateItem  = {
     v: unknown;
     supplier: () => unknown;
 };
-export type RerenderPointItem = {
-    t: typeof ITEM_RERENDER_POINT;
-    v: RerenderPoint;
-}
 
 export type UIRootItem = UIChildRootItem | ListRendererItem | StateItem;
 
@@ -831,10 +829,10 @@ export function newRerenderPoint(): RerenderPoint {
 }
 
 const FROM_HERE = -1;
-const FROM_AFTER_HERE = 0;
-const FROM_ONE_AFTER_HERE = 1;
+// const FROM_AFTER_HERE = 0;
+// const FROM_ONE_AFTER_HERE = 1;
 export function getRererenderPoint(r: UIRoot, offset: number): RerenderPoint {
-    const state = getState(r, newRerenderPoint);
+    const state = imState(r, newRerenderPoint);
     state.domRootIdx = r.domRoot.currentIdx;
     state.itemsIdx = r.items.idx + offset;
     return state;
@@ -842,7 +840,7 @@ export function getRererenderPoint(r: UIRoot, offset: number): RerenderPoint {
 
 ///////// Common immediate mode UI helpers
 
-function getStateIntenal<T>(r: UIRoot, supplier: () => T, skipSupplierCheck: boolean): T {
+function imStateInternal<T>(r: UIRoot, supplier: () => T, skipSupplierCheck: boolean): T {
     // Don't render new elements to this thing when you have a list renderer that is active!
     // render to that instead.
     assert(r.openListRenderers === 0);
@@ -882,18 +880,18 @@ function getStateIntenal<T>(r: UIRoot, supplier: () => T, skipSupplierCheck: boo
  *      const s = getState(r, () => { ... some state } );
  * ```
  *
- * In which case, you'll need to use getDynamicState instead. But try not to!
+ * In which case, you'll need to use {@link imStateInline} instead. But try not to!
  */
-export function getState<T>(r: UIRoot, supplier: () => T): T {
-    return getStateIntenal(r, supplier, false);
+export function imState<T>(r: UIRoot, supplier: () => T): T {
+    return imStateInternal(r, supplier, false);
 }
 
 /**
  * WARNING: using this method won't allow you to catch out-of-order hook-rendering bugs at runtime, 
- * leading to potential data corruption. use this at your own peril.
+ * leading to potential data corruption.
  */
-export function getUnsafeState<T>(r: UIRoot, supplier: () => T): T {
-    return getStateIntenal(r, supplier, true);
+export function imStateInline<T>(r: UIRoot, supplier: () => T): T {
+    return imStateInternal(r, supplier, true);
 }
 
 export function el<E extends ValidElement = ValidElement>(r: UIRoot, elementSupplier: () => E, next?: RenderFn<E>): UIRoot<E> {
@@ -954,17 +952,18 @@ export function createSvgElement<E extends SVGElement>(type: string): E {
     return svgEl;
 }
 
-function newDiv(): HTMLDivElement {
-    return document.createElement("DIV") as HTMLDivElement;
+export function newDiv() {
+    return document.createElement("div");
+}
+
+export function newSpan() {
+    return document.createElement("span");
 }
 
 export function div(r: UIRoot, next?: RenderFn<HTMLDivElement>): UIRoot<HTMLDivElement> {
     return el<HTMLDivElement>(r, newDiv, next);
 }
 
-function newSpan(): HTMLDivElement {
-    return document.createElement("DIV") as HTMLDivElement;
-}
 
 export function span(r: UIRoot, next?: RenderFn<HTMLSpanElement>): UIRoot<HTMLSpanElement> {
     return el<HTMLSpanElement>(r, newSpan, next);
@@ -995,7 +994,7 @@ export function ElseIf(condition: boolean, rIn: UIRoot, next: RenderFn) {
 }
 
 export function text(r: UIRoot, text: string) {
-    // Don't overwrite actual dom elements with text!
+    // don't overwrite the real children!
     assert(!r.hasRealChildren);
 
     if (r.root.textContent !== text) {
@@ -1053,7 +1052,7 @@ function realtimeState(): {
 export function realtime(r: UIRoot, fn: RenderFnArgs<[number]>) {
     const rerender = rerenderFn(r, () => realtime(r, fn));
 
-    const state = getState(r, realtimeState);
+    const state = imState(r, realtimeState);
     if (!state.animation) {
         state.animation = newAnimation((dt) => {
             if (!canAnimate(r)) {
@@ -1078,9 +1077,9 @@ function newIntermittentState() : {
 }
 
 export function intermittent(r: UIRoot, fn: RenderFn, ms: number) {
-    const rerender = rerenderFn(r, () => realtime(r, fn));
+    const rerender = rerenderFn(r, () => intermittent(r, fn, ms));
 
-    const state = getState(r, newIntermittentState);
+    const state = imState(r, newIntermittentState);
     state.ms = ms;
     if (!state.animation) {
         state.animation = newAnimation((dt) => {
@@ -1149,7 +1148,7 @@ export function on<K extends keyof HTMLElementEventMap>(
     listener: (this: HTMLElement, ev: HTMLElementEventMap[K]) => any,
     options?: boolean | AddEventListenerOptions
 ) {
-    const handler = getState(r, newEventHandlerRef as (typeof newEventHandlerRef<K>));
+    const handler = imState(r, newEventHandlerRef as (typeof newEventHandlerRef<K>));
     if (handler.val === null) {
         handler.val = listener;
         r.root.addEventListener(type, (e) => {

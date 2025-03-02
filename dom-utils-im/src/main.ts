@@ -1,8 +1,12 @@
 import { 
     getCurrentNumAnimations, 
     on, 
-    div, el, getState, rerenderFn, text, UIRoot, list, realtime, errorBoundary, If, ElseIf, newUiRoot, Else, 
+    div, el, imState, rerenderFn, text, UIRoot, list, realtime, errorBoundary, If, ElseIf, newUiRoot, Else,
 } from "src/utils/im-dom-utils";
+
+function newInput() {
+    return document.createElement("input");
+}
 
 function newButton() {
      return document.createElement("button");
@@ -10,10 +14,6 @@ function newButton() {
 
 function newLabel() {
     return document.createElement("label");
-}
-
-function newInput() {
-    return document.createElement("input");
 }
 
 function Button(r: UIRoot, buttonText: string, onClick: () => void) {
@@ -50,7 +50,7 @@ function newWallClockState() {
 
 function WallClock(r: UIRoot) {
     realtime(r, (r, dt) => {
-        const value = getState(r, newWallClockState);
+        const value = imState(r, newWallClockState);
 
         value.val += (-0.5 + Math.random()) * 0.02;
         if (value.val > 1) value.val = 1;
@@ -132,7 +132,7 @@ function newAppState() {
 
 function newGridState() {
     let gridRows = 100;
-    let gridCols = 400;
+    let gridCols = 100;
     const values: number[][] = [];
 
     resize(values, gridRows, gridCols);
@@ -143,7 +143,7 @@ function newGridState() {
 function App(r: UIRoot) {
     const rerender = rerenderFn(r, () => App(r));
 
-    const s = getState(r, newAppState);
+    const s = imState(r, newAppState);
     s.rerender = rerender;
 
     errorBoundary(r, r => {
@@ -217,7 +217,7 @@ function App(r: UIRoot) {
         */
 
         If(s.grid, r, r => {
-            const gridState = getState(r, newGridState);
+            const gridState = imState(r, newGridState);
 
             realtime(r, (r, dt) => {
                 const { values } = gridState;
@@ -297,7 +297,6 @@ function App(r: UIRoot) {
 }
 
 const appRoot = newUiRoot(() => document.body);
-
 function rerenderApp() { 
     App(appRoot);
 }
