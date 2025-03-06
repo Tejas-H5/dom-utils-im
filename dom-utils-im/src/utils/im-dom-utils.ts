@@ -1,4 +1,4 @@
-// *IM* DOM-utils v0.1.0005 - @Tejas-H5
+// *IM* DOM-utils v0.1.0006 - @Tejas-H5
 // A variation on DOM-utils with the immediate-mode API isntead of the normal one. I'm still deciding which one I will continue to use.
 // Right now, this one seems better, but the other one has a 'proven' track record of actually working.
 // But in a matter of hours/days, I was able to implement features in this framework that I wasn't able to for months/years in the other one...
@@ -1196,21 +1196,31 @@ export function imRef<T>(r: UIRoot): Ref<T> {
 
 class Memoizer{
     items = newImArray<[unknown]>();
-    changed = true;
+    isSame = true;
 
     begin() {
         if (this.items.expectedLength !== -1) {
             imLockSize(this.items);
         }
+
+        imReset(this.items);
+        this.isSame = true;
     }
 
-    val<T>(val: T) {
+    keys(obj: Record<string, unknown>) {
+        for (const k in obj) {
+            this.val(obj[k]);
+        }
+        return this;
+    }
+
+    val(val: unknown) {
         let existing = imGetNext(this.items);
         if (!existing) {
             existing = imPush(this.items, [val]);
         }
-        if (val !== existing[0]) {
-            this.changed = true;
+        if (val === existing[0]) {
+            this.isSame = false;
         }
         existing[0] = val;
         return this;
@@ -1222,7 +1232,9 @@ function newMemoizer() {
 }
 
 export function imMemo(r: UIRoot) {
-    return imState(r, newMemoizer);
+    const val = imState(r, newMemoizer);
+    val.begin();
+    return val;
 }
 
 /**
