@@ -651,15 +651,6 @@ export function isVisibleEl(el: HTMLElement) {
     return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
 }
 
-/** 
- * Any name and string is fine, but I've hardcoded a few for autocomplete. 
- * A common bug is to type 'styles' instead of 'style' and wonder why the layout isn't working, for example.
- */
-type Attrs = Record<string, string | string[] | undefined> & {
-    style?: string | Record<keyof HTMLElement["style"], string | null>;
-    class?: string[];
-};
-
 export function setAttr<T extends ValidElement>(el: Insertable<T>, key: string, val: string | undefined, wrap = false) {
     if (val === undefined) {
         el.el.removeAttribute(key);
@@ -686,6 +677,16 @@ export function getAttr<T extends ValidElement>(el: Insertable<T>, key: string) 
     return el.el.getAttribute(key);
 }
 
+
+/** 
+ * Any name and string is fine, but I've hardcoded a few for autocomplete. 
+ * A common bug is to type 'styles' instead of 'style' and wonder why the layout isn't working, for example.
+ */
+type Attrs = Record<string, string | string[] | undefined> & {
+    style?: string | Record<keyof HTMLElement["style"], string | null>;
+    class?: string[];
+};
+
 export function setAttrs<T extends ValidElement, C extends Insertable<T>>(ins: C, attrs: Attrs, wrap = false): C {
     for (const attr in attrs) {
         let val = attrs[attr];
@@ -694,14 +695,6 @@ export function setAttrs<T extends ValidElement, C extends Insertable<T>>(ins: C
             // couldn't figure out the correct typescript type. AI was no help either btw.
             // Also add a space, so that we can call `setAttrs` on the same component multiple times without breaking the class defs
             val = val.join(" ") + " ";
-        }
-
-        if (attr === "style" && typeof val === "object") {
-            const styles = val as Record<keyof HTMLElement["style"], string | null>;
-            for (const s in styles) {
-                // @ts-expect-error trust me bro
-                setStyle(ins, s, styles[s]);
-            }
         }
 
         setAttr(ins, attr, val, wrap);

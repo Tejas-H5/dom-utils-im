@@ -24,27 +24,28 @@ function appState() {
 }
 
 function App(r: UIRoot) {
-    const rerender = rerenderFn(r);
-    const state = getState(r);
+    imRerenderable(r, (r, rerender) => {
+        const state = getState(r);
 
-    div(r, r => {
-        text(r, "Count: " + count);
-    });
-
-    div(r, r => {
-        el(r, newButton, r => {
-            text(r, "Increment");
-            on(r, "click", () => {
-                state.count++;
-                rerender();
-            });
-        });
-        text(r, "" + count);
-    });
-
-    If(condition, r, r => {
         div(r, r => {
-            text(r, "Conditional logicksaldksdj");
+            text(r, "Count: " + count);
+        });
+
+        div(r, r => {
+            el(r, newButton, r => {
+                text(r, "Increment");
+                on(r, "click", () => {
+                    state.count++;
+                    rerender();
+                });
+            });
+            text(r, "" + count);
+        });
+
+        If(condition, r, r => {
+            div(r, r => {
+                text(r, "Conditional logicksaldksdj");
+            });
         });
     });
 }
@@ -148,9 +149,9 @@ function App(r: UIRoot) {
 
 ```
 
-We node need a way to rerender ourselves when we update state. This is probably the most complicated part of this framework
-to understand, but I've not been able to find a simpler way to do this just yet.
-The current way to rerender a component is to create a `renderFn`, and then invoke it as needed:
+We now need a way to rerender ourselves when we update state. This used to be extremely complicated 
+to understand, and error-prone, but it is now a lot simpler. You'll just need to wrap the part of your
+component tree you want to rerender in `imRerenderable`:
 
 ```ts
 
@@ -158,36 +159,22 @@ function newRenderableComponentState() {
     return { count: 0 };
 }
 function RerenderableComponent(r: UIRoot, arg1: A, arg2: B, ...etc) {
-    const rerender = imRrerenderFn(r, () => RerenderableComponent(r, arg1, arg2, ...etc)); 
-    const state = imState(r, newRenderableComponentState);
+    imRerenderable(r, (r, rerender) => {
+        const state = imState(r, newRenderableComponentState);
 
-    Button(r, r => {
-        text(r, "Count: " + state.count);
-        on(r, "mousedown", () => {
-            state.count++;
-            rerender();
+        Button(r, r => {
+            text(r, "Count: " + state.count);
+            on(r, "mousedown", () => {
+                state.count++;
+                rerender();
+            });
         });
     });
 }
 ```
 
-The only condition is that this `renderFn` is the first thing that your component creates. This is because
-calling imRrerenderFn will store the current DOM index and the current im-state index _at the time that it's called_,
-and calling the rerender() method will simply reset the current DOM index and the current im-state index to that point
-and invoke the render function you passed in. 
-
-The following won't work, for exmaple:
-
-```ts
-function renderableComponentState() {
-    return { count: 0 };
-}
-function RerenderableComponent(r: UIRoot, arg1: A, arg2: B, ...etc) {
-    const state = imState(r, renderableComponentState);
-    // when we call RerenderableComponent, the call to imStateDynamic will actually fetch the state contained
-    // in imRrerenderFn, because the immediate-mode index recorded at this point is one higher than 
-    const rerender = imRrerenderFn(r, () => RerenderableComponent(r, arg1, arg2, ...etc)); 
-}
-```
-
-
+A lot of things that I struggled to conceptualize or implement in my old framework (Source also included, next to `im-dom-utils.ts`, you'll find a regular
+`dom-utils.ts` with a lot of overlapping functionality, but totally different DOM 'rendering' code) just fell out for free when I created this framework.
+E.g in the old framework, you couldn't conditionally render DOM nodes. The way I achieved this effect was by disabling a node with `display: none !important` css.
+This meant that realtime animations 1 level under a component we've hidden were actually never cancelled, because it checks `isConnected` and `isHidden`, but
+not the computed css (I figured it would be too expensive to check this each time) to determine if the component is hidden. 
