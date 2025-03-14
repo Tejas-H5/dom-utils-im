@@ -3,6 +3,8 @@
 // Right now, this one seems better, but the other one has a 'proven' track record of actually working.
 // But in a matter of hours/days, I was able to implement features in this framework that I wasn't able to for months/years in the other one...
 
+import { RenderGroup } from "./dom-utils";
+
 //////////
 // Assertion functions
 
@@ -611,7 +613,8 @@ export type RerenderPoint =  {
 export class UIRoot<E extends ValidElement = ValidElement> {
     readonly root: E;
     readonly domRoot: DomRoot<E>;
-    readonly elementSupplier: () => ValidElement;
+    // If there was no supplier, then this root is probably attached to the same DOM element as another UI root.
+    readonly elementSupplier: (() => ValidElement) | null;
 
     readonly items = newImArray<UIRootItem>();
     lockImArray = false;
@@ -620,26 +623,26 @@ export class UIRoot<E extends ValidElement = ValidElement> {
     hasRealChildren = false;
     manuallyHidden = false;
     ifStatementOpen = false;
-    removed = false;
+    removed = true;
     began = false;
 
     // Users should call `newUiRoot` instead.
-    constructor(domRoot: DomRoot<E>, elementFactory: () => ValidElement) {
+    constructor(domRoot: DomRoot<E>, elementFactory: (() => ValidElement) | null) {
         this.root = domRoot.root;
         this.domRoot = domRoot;
         this.elementSupplier = elementFactory;
     }
 
-    isFirstRenderCall = true;
-    get isFirstRender() {
-        return this.isFirstRenderCall;
-    }
+    /** Used by the {@link init} to run just once per element */
+    init = false;
 
     // TODO: think of how we can remove this, from user code at the very least.
     __begin(rp?: RerenderPoint) {
         resetDomRoot(this.domRoot, rp?.domRootIdx);
 
         imReset(this.items, rp?.itemsIdx);
+
+        push(this);
 
         // NOTE: avoid any more asertions here - the component may error out, and
         // __end may not get called. No I'm not going to catch it with an exception stfu. We livin on the edge, bois.
@@ -658,9 +661,10 @@ export class UIRoot<E extends ValidElement = ValidElement> {
         assert(this.began);
         this.began = false;
 
-        if (this.isFirstRenderCall) {
+        pop();
+
+        if (this.items.expectedLength === -1) {
             imLockSize(this.items);
-            this.isFirstRenderCall = false;
             return;
         }
 
@@ -728,8 +732,10 @@ export class UIRoot<E extends ValidElement = ValidElement> {
 
 export class ListRenderer {
     uiRoot: UIRoot;
+    keys = new Map<string | number, { root: UIRoot, rendered: boolean }>();
     builders: UIRoot[] = [];
     builderIdx = 0;
+    current: UIRoot | null = null;
 
     constructor(root: UIRoot) {
         this.uiRoot = root;
@@ -738,49 +744,79 @@ export class ListRenderer {
     __begin() {
         this.builderIdx = 0;
         this.uiRoot.openListRenderers++;
+        for (const v of this.keys.values()) {
+            v.rendered = false;
+        }
+        this.current = null;
     }
 
-    getCurrent() {
-        assert(this.builderIdx > 0);
-        return this.builders[this.builderIdx - 1];
+    /** Use this for a keyed list renderer */
+    withRootKey(key: string | number, fn: () => void) {
+        let result = this.keys.get(key);
+        if (!result) {
+            result = { 
+                root: new UIRoot(this.uiRoot.domRoot, null),
+                rendered: false
+            };
+            this.keys.set(key, result);
+        } else {
+            // Don't render same list element twice in single render pass, haiyaaaa
+
+            assert(!result.rendered);
+        }
+
+        this.appendRootResult(result.root);
+        result.rendered = true;
+        this.current = result.root;
+
+        fn();
+
+        if (!result.root.removed) {
+            result.root.__end();
+        } else {
+            pop();
+        }
+
+        return result.root;
     }
 
-    getNext() {
+    withRoot(fn: () => void) {
         const idx = this.builderIdx;
 
         // DEV: whenever this.builderIdx === this.builders.length, we should append another builder to the list
         assert(idx <= this.builders.length);
 
-        if (idx > 0) {
-            const last = this.builders[idx - 1];
-            if (!last.removed) {
-                last.__end();
-            }
-        }
-
         let result;
         if (idx < this.builders.length) {
             result = this.builders[idx];
         } else {
-            // NOTE: the supplier is not important at all here, so I'm just passing in something random.
-            result = new UIRoot(this.uiRoot.domRoot, newDiv);
+            result = new UIRoot(this.uiRoot.domRoot, null);
             this.builders.push(result);
         }
 
-        // Append new list elements to where we're currently appending
-        const currentDomRootIdx = result.domRoot.currentIdx;
-        result.__begin(undefined);
-        result.domRoot.currentIdx = currentDomRootIdx;
+        this.appendRootResult(result);
+        this.current = result;
         this.builderIdx++;
+
+        fn();
+
+        if (!result.removed) {
+            result.__end();
+        } else {
+            pop();
+        }
 
         return result;
     }
 
-    end() {
-        if (this.builderIdx > 0) {
-            this.builders[this.builderIdx - 1].__end();
-        }
+    appendRootResult(result: UIRoot) {
+        // Append new list elements to where we're currently appending
+        const currentDomRootIdx = result.domRoot.currentIdx;
+        result.__begin(undefined);
+        result.domRoot.currentIdx = currentDomRootIdx;
+    }
 
+    end() {
         // DEV: don't decrement this more times than you increment it
         assert(this.uiRoot.openListRenderers > 0);
         this.uiRoot.openListRenderers--;
@@ -789,6 +825,11 @@ export class ListRenderer {
         for (let i = this.builderIdx; i < this.builders.length; i++) {
             this.builders[i].__removeAllDomElements();
         }
+        for (const v of this.keys.values()) {
+            if (!v.rendered) {
+                v.root.__removeAllDomElements();
+            }
+        }
         this.builders.length = this.builderIdx;
     }
 
@@ -796,6 +837,9 @@ export class ListRenderer {
     __removeAllDomElementsFromList() {
         for (let i = 0; i < this.builders.length; i++) {
             this.builders[i].__removeAllDomElements();
+        }
+        for (const v of this.keys.values()) {
+            v.root.__removeAllDomElements();
         }
     }
 
@@ -807,10 +851,12 @@ export function newUiRoot<E extends ValidElement>(supplier: () => E): UIRoot<E> 
     return result;
 }
 
-type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot<T>) => void;
-type RenderFnArgs<A extends unknown[], T extends ValidElement = ValidElement> = (r: UIRoot<T>, ...args: A) => void;
+export type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot<T>) => void;
+export type RenderFnArgs<A extends unknown[], T extends ValidElement = ValidElement> = (r: UIRoot<T>, ...args: A) => void;
 
-export function beginList(r: UIRoot): ListRenderer {
+export function beginList(): ListRenderer {
+    const r = getCurrentRoot();
+
     let result = imGetNext(r.items);
     if (!result) {
         result = imPush(r.items, { t: ITEM_LIST, v: new ListRenderer(r) });
@@ -823,13 +869,69 @@ export function beginList(r: UIRoot): ListRenderer {
 
     result.v.__begin();
 
-    return result.v;
+    return result.v as ListRenderer;
 }
 
-export function imList(r: UIRoot, listRenderFn: (l: ListRenderer) => void) {
-    const list = beginList(r);
+/**
+ * Use lists to return an arbitrary amount of roots. 
+ * The items may be keyed, or not keyed. 
+ *
+ * ```ts
+ * // Non-keyed usage:
+ *
+ * imList(r, l => {
+ *     for (let i = 0; i < n; i++) {
+ *         const r = l.getNext();
+ *         Component(r);
+ *     }
+ * });
+ *
+ * // Keyed usage:
+ *
+ * imList(r, l => {
+ *     for (const user of users) {
+ *         const r = l.get(user.id);
+ *         UserProfileInfo(r, user);
+ *     }
+ * });
+ *
+ * ```
+ *
+ * You are under no obligation to key or not key the list - there is no best practice.
+ * You should do what you believe is more fitting/performant/correct for your use-case.
+ *
+ * NOTE: You can also use imList like a switch statement:
+ *
+ * ```
+ * imList(r, l => {
+ *      const r = l.get(unionObject.type);
+ *      switch(unionObject.type) {
+ *          case "type1":
+ *              RenderComponent1(r);
+ *              break;
+ *          case "type2":
+ *              RenderComponent2(r);
+ *              break;
+ *          ...
+ *      }
+ * });
+ * ```
+ *
+ * This is because each `root` can accept any arbitrary component on the first render,
+ * and because you're keying the list on the type, you can be sure that subsequent renders
+ * on the same root will always be with the same component.
+ */
+export function imList(listRenderFn: (l: ListRenderer) => void, openIfWhenEmpty: boolean = true) {
+    const r = getCurrentRoot();
+
+    const list = beginList();
     listRenderFn(list);
     list.end();
+
+
+    if (list.current === null && openIfWhenEmpty) {
+        r.ifStatementOpen = true;
+    }
 }
 
 
@@ -841,7 +943,7 @@ const FROM_HERE = -1;
 // const FROM_AFTER_HERE = 0;
 // const FROM_ONE_AFTER_HERE = 1;
 function imRerenderPoint(r: UIRoot, offset: number): RerenderPoint {
-    const state = imState(r, newRerenderPoint);
+    const state = imState(newRerenderPoint);
     state.domRootIdx = r.domRoot.currentIdx;
     state.itemsIdx = r.items.idx + offset;
     return state;
@@ -849,7 +951,8 @@ function imRerenderPoint(r: UIRoot, offset: number): RerenderPoint {
 
 ///////// Common immediate mode UI helpers
 
-function imStateInternal<T>(r: UIRoot, supplier: () => T, skipSupplierCheck: boolean): T {
+function imStateInternal<T>(supplier: () => T, skipSupplierCheck: boolean): T {
+    const r = getCurrentRoot();
     // Don't render new elements to this thing when you have a list renderer that is active!
     // render to that instead.
     assert(r.openListRenderers === 0);
@@ -891,8 +994,8 @@ function imStateInternal<T>(r: UIRoot, supplier: () => T, skipSupplierCheck: boo
  *
  * In which case, you'll need to use {@link imStateInline} instead. But try not to!
  */
-export function imState<T>(r: UIRoot, supplier: () => T): T {
-    return imStateInternal(r, supplier, false);
+export function imState<T>(supplier: () => T): T {
+    return imStateInternal(supplier, false);
 }
 
 /**
@@ -902,11 +1005,37 @@ export function imState<T>(r: UIRoot, supplier: () => T): T {
  * leading to potential data corruption. 
  *
  */
-export function imStateInline<T>(r: UIRoot, supplier: () => T): T {
-    return imStateInternal(r, supplier, true);
+export function imStateInline<T>(supplier: () => T): T {
+    return imStateInternal(supplier, true);
 }
 
-export function el<E extends ValidElement = ValidElement>(r: UIRoot, elementSupplier: () => E, next?: RenderFn<E>): UIRoot<E> {
+let appRoot: UIRoot = newUiRoot(() => document.body);
+const currentStack: UIRoot[] = [];
+export function setUiRoot(r: UIRoot) {
+    assert(currentStack.length <= 1);
+    appRoot = r;
+    currentStack[0] = appRoot;
+}
+
+export function getCurrentRoot(): UIRoot {
+    return currentStack[currentStack.length - 1];
+}
+
+function push(r: UIRoot) {
+    currentStack.push(r);
+}
+function pop() {
+    currentStack.pop();
+}
+
+export function startRendering(r: UIRoot = appRoot, rp?: RerenderPoint) {
+    currentStack.length = 0;
+    r.__begin(rp);
+}
+
+export function el<E extends ValidElement = ValidElement>(elementSupplier: () => E, next?: () => void): UIRoot<E> {
+    const r = getCurrentRoot();
+
     // Don't render new elements to this thing when you have a list renderer that is active!
     // render to that instead.
     assert(r.openListRenderers === 0);
@@ -945,22 +1074,12 @@ export function el<E extends ValidElement = ValidElement>(r: UIRoot, elementSupp
     // Then I would.
     // ```
 
-    next?.(result.v as UIRoot<E>);
+    next?.();
 
     result.v.__end();
 
     return result.v as UIRoot<E>;
 } 
-
-
-/** 
- * Any name and string is fine, but I've hardcoded a few for autocomplete. 
- * A common bug is to type 'styles' instead of 'style' and wonder why the layout isn't working, for example.
- */
-type Attrs = Record<string, string | string[] | undefined> & {
-    style?: string | Record<keyof HTMLElement["style"], string | null>;
-    class?: string[];
-};
 
 function setAttribute(e: ValidElement, attr: string, val: string | null) {
     if (val !== null) {
@@ -983,11 +1102,16 @@ export function createSvgElement<E extends SVGElement>(type: string): E {
     return svgEl;
 }
 
-export function newDomElement<K extends keyof HTMLElementTagNameMap>(
-    tagName: K,
-    attrs?: Attrs,
-): HTMLElementTagNameMap[K] {
-    const element = document.createElement(tagName);
+/** 
+ * Any name and string is fine, but I've hardcoded a few for autocomplete. 
+ * A common bug is to type 'styles' instead of 'style' and wonder why the layout isn't working, for example.
+ */
+type Attrs = Record<string, string | string[] | undefined> & {
+    style?: string | Record<keyof HTMLElement["style"], string | null>;
+    class?: string[];
+};
+
+function setAttributes(element: ValidElement, attrs: Attrs) {
     for (const attr in attrs) {
         let val = attrs[attr];
         if (val === undefined) {
@@ -1003,6 +1127,16 @@ export function newDomElement<K extends keyof HTMLElementTagNameMap>(
 
         setAttribute(element, attr, val);
     }
+}
+
+export function newDomElement<K extends keyof HTMLElementTagNameMap>(
+    tagName: K,
+    attrs?: Attrs,
+): HTMLElementTagNameMap[K] {
+    const element = document.createElement(tagName);
+    if (attrs) {
+        setAttributes(element, attrs);
+    }
     return element;
 }
 
@@ -1014,45 +1148,94 @@ export function newSpan() {
     return newDomElement("span");
 }
 
-export function div(r: UIRoot, next?: RenderFn<HTMLDivElement>): UIRoot<HTMLDivElement> {
-    return el<HTMLDivElement>(r, newDiv, next);
+export function div(next?: () => void): UIRoot<HTMLDivElement> {
+    return el<HTMLDivElement>(newDiv, next);
+}
+
+export function text(str: string) {
+    const r = getCurrentRoot();
+    r.text(str);
 }
 
 
-export function span(r: UIRoot, next?: RenderFn<HTMLSpanElement>): UIRoot<HTMLSpanElement> {
-    return el<HTMLSpanElement>(r, newSpan, next);
+export function span(next?: () => void): UIRoot<HTMLSpanElement> {
+    return el<HTMLSpanElement>(newSpan, next);
 }
 
 
-type Falsy = "" | 0 | null | undefined | false;
-export function imIf<V>(val: V | Falsy, r: UIRoot, next: (r: UIRoot, typeNarrowedVal: V) => void) {
+/// NOTE: This doesn't include "" or 0, mainly to avoid various 'why isn't my thing showing up' bugs
+type ActualFalseyValues = null | undefined | false;
+
+/**
+ * You'll need to use this, as well as {@link imElse} and {@link imElseIf} for (most) conditional rendering,
+ * so that you're rendering the same amount of im-state entries to a UIRoot at a time.
+ * It's just implemented with an imList under the hood, but that might change in the future.
+ *
+ * This component also does smoe basic type narrowing.
+ *
+ * For switch-like behaviour, you may be able to use a {@link imList} directly - check it's documentation for more info.
+ *
+ * You can also use it after {@link imList} - it will render stuff when the list rendered zero things.
+ *
+ * Examples:
+ *
+ * ```ts
+ *
+ * // basic usage:
+ * imIf(condition1, r, r => { ... });
+ * imElseIf(condition2, r => { ... });
+ * imElse(r, r => { ... });
+ *
+ * // type narrowing
+ * imIf(valueOrNull, r, (r, value) => { ... });
+ * 
+ * // lists
+ * imList(...)
+ * imElse(r, r => { // this part runs when imList rendered 0 items 
+ * });
+ *
+ * ```
+ */
+export function imIf<V>(val: V | ActualFalseyValues, next: (typeNarrowedVal: V) => void) {
+    const r = getCurrentRoot();
     r.ifStatementOpen = true;
-    ElseIf(val, r, next);
+    imElseIf(val, next);
 }
 
-export function imElse(r: UIRoot, next: (r: UIRoot, typeNarrowedVal: true) => void) {
-    ElseIf(true, r, next);
+/**
+ * See {@link imIf}
+ */
+export function imElse(next: () => void) {
+    imElseIf(true, next);
 }
 
-export function ElseIf<V>(val: V | Falsy, rIn: UIRoot, next: (r: UIRoot, typeNarrowedVal: V) => void) {
-    imList(rIn, l => {
+/**
+ * See {@link imIf}
+ */
+export function imElseIf<V>(val: V | ActualFalseyValues, next: (typeNarrowedVal: V) => void) {
+    const rIn = getCurrentRoot();
+    console.log(rIn);
+    imList(l => {
         const domRootIdx = rIn.domRoot.currentIdx;
-        const r = l.getNext();
 
-        if (rIn.ifStatementOpen && val) {
+        if (rIn.ifStatementOpen && (val || val === 0 || val === "")) {
             rIn.ifStatementOpen = false;
-            next(r, val);
+            l.withRoot(() => {
+                next(val);
+            });
         } else {
             l.__removeAllDomElementsFromList();
             rIn.domRoot.currentIdx = domRootIdx;
         }
-    });
+    }, false);
 }
 
 function canAnimate(r: UIRoot) {
     return !r.removed && !r.manuallyHidden;
 }
 
+// Old documentation for the hook:
+//
 // The `rerender` method resets `r`'s current immediate mode state index to 1 before the call to `rerenderFn`, and the invokes
 // the render method you passed in. It relies on the fact that every render method will always generate the same number of immediate
 // mode state entries each time, so we can reliably just reset some indicies to what they were before we called them, and then 
@@ -1076,16 +1259,20 @@ function canAnimate(r: UIRoot) {
 //
 // This is because when we generate `rerender`, getState will have bumped the immedate mode index up by 1, so 
 // the index we store will be one higher than what was correct if we wanted to call IWillThrowAnError(r) on the root again.
-//
-// NOTE: Always call this as the first immediate mode function in your component.
-export function imRerenderable(r: UIRoot, fn: (r: UIRoot, rerender: () => void) => void) {
-    const rerenderPoint = imRerenderPoint(r, FROM_HERE);
-    const renderFn = imRef<(r: UIRoot, renderFn: () => void) => void>(r);
-    renderFn.val = fn;
 
-    fn(r, () => {
-        r.__begin(rerenderPoint);
-        imRerenderable(r, fn)
+/**
+ * Wrap any component tree you want to the abilit to 'rerender' in this method.
+ *
+ * Due to the way this framework is implemented, I haven't been able to just give you a rerender method on 
+ * every UIRoot, unfortunately. There's a big block comment above this JSDoc that explains it, if you 
+ * care to navigate here and read it...
+ */
+export function imRerenderable(fn: (rerender: () => void) => void) {
+    const r = getCurrentRoot();
+    const rerenderPoint = imRerenderPoint(r, FROM_HERE);
+    fn(() => {
+        startRendering(r, rerenderPoint);
+        imRerenderable(fn)
     });
 }
 
@@ -1099,9 +1286,11 @@ function newRealtimeState(): {
     };
 }
 
-export function realtime(r: UIRoot, fn: RenderFnArgs<[number]>) {
-    imRerenderable(r, (r, rerender) => {
-        const state = imState(r, newRealtimeState);
+export function realtime(fn: (dt: number) => void) {
+    imRerenderable((rerender) => {
+        const r = getCurrentRoot();
+
+        const state = imState(newRealtimeState);
         if (!state.animation) {
             state.animation = newAnimation((dt) => {
                 if (!canAnimate(r)) {
@@ -1114,7 +1303,7 @@ export function realtime(r: UIRoot, fn: RenderFnArgs<[number]>) {
             });
         }
 
-        fn(r, state.dt);
+        fn(state.dt);
 
         startAnimation(state.animation);
     });
@@ -1126,9 +1315,10 @@ function newIntermittentState() : {
     return { t: 0, ms: 0 , animation: null };
 }
 
-export function intermittent(r: UIRoot, fn: RenderFn, ms: number) {
-    imRerenderable(r, (r, rerender) => {
-        const state = imState(r, newIntermittentState);
+export function intermittent(fn: RenderFn, ms: number) {
+    imRerenderable((rerender) => {
+        const r = getCurrentRoot();
+        const state = imState(newIntermittentState);
         state.ms = ms;
         if (!state.animation) {
             state.animation = newAnimation((dt) => {
@@ -1154,12 +1344,11 @@ export function intermittent(r: UIRoot, fn: RenderFn, ms: number) {
 
 
 export function imErrorBoundary(
-    rIn: UIRoot,
-    renderFnNormal: RenderFn,
-    renderFnError: RenderFnArgs<[any, () => void]>,
+    renderFnNormal: () => void,
+    renderFnError: (error: any, recover: () => void) => void,
 ) {
-    imRerenderable(rIn, (rIn, rerender) => {
-        const l = beginList(rIn);
+    imRerenderable((rerender) => {
+        const l = beginList();
 
         const recover = () => {
             l.__removeAllDomElementsFromList();
@@ -1167,21 +1356,26 @@ export function imErrorBoundary(
         }
 
         try {
-            renderFnNormal(l.getNext());
+            l.withRoot(renderFnNormal);
         } catch (error) {
-            const r = l.getCurrent();
-            r.__removeAllDomElements();
-            // need to reset the dom root, since we've just removed elements underneath it
-            resetDomRoot(r.domRoot);
+            const r = l.current;
+            if (r) {
+                r.__removeAllDomElements();
 
-            renderFnError(l.getNext(), error, recover);
+                // need to reset the dom root, since we've just removed elements underneath it
+                resetDomRoot(r.domRoot);
+            }
+
+            l.withRoot(() => {
+                renderFnError(error, recover);
+            });
         } finally {
             l.end();
         }
     });
 }
 
-type Ref<T> = { val: T | null; }
+export type Ref<T> = { val: T | null; }
 function newRef<T>(): Ref<T> {
     return { val: null };
 }
@@ -1189,13 +1383,18 @@ function newRef<T>(): Ref<T> {
 // NOTE: Prefer using this for transient UI state rather than actual program state, 
 // and prefer `imState` for actual program state that you're storing locally, so that
 // your refactorings willl be easier. 
-export function imRef<T>(r: UIRoot): Ref<T> {
-    return imState(r, newRef as (typeof newRef<T>));
+export function imRef<T>(): Ref<T> {
+    return imState(newRef as (typeof newRef<T>));
 }
 
 
 class Memoizer{
     items = newImArray<[unknown]>();
+
+    // If a Memo is supposed to keep our realtime animation loop from firing repeatedly,
+    // but we've done `if(imMemo(r).val(r))` by mistake, the bug will be some expensive thing firing
+    // very repeatedly. However, if the mistake was `if(!imMemo(r).val(r))`, then nothing will happen.
+    // This is why I am using `isSame` here instead of `changed`, so that the mis-use will be less costly.
     isSame = true;
 
     begin() {
@@ -1218,8 +1417,8 @@ class Memoizer{
         let existing = imGetNext(this.items);
         if (!existing) {
             existing = imPush(this.items, [val]);
-        }
-        if (val === existing[0]) {
+            this.isSame = false;
+        } else if (val !== existing[0]) {
             this.isSame = false;
         }
         existing[0] = val;
@@ -1231,8 +1430,8 @@ function newMemoizer() {
     return new Memoizer();
 }
 
-export function imMemo(r: UIRoot) {
-    const val = imState(r, newMemoizer);
+export function imMemo() {
+    const val = imState(newMemoizer);
     val.begin();
     return val;
 }
@@ -1241,13 +1440,13 @@ export function imMemo(r: UIRoot) {
  * Seems like simply doing r.root.onwhatever = () => { blah } destroys performance,
  * so this  method exists now...
  */
-export function imEvent<K extends keyof HTMLElementEventMap>(
-    r: UIRoot,
+export function imOn<K extends keyof HTMLElementEventMap>(
     type: K,
     listener: (this: HTMLElement, ev: HTMLElementEventMap[K]) => any,
     options?: boolean | AddEventListenerOptions
 ) {
-    const handlerRef = imRef<((ev: HTMLElementEventMap[K]) => any)>(r);
+    const r = getCurrentRoot();
+    const handlerRef = imRef<((ev: HTMLElementEventMap[K]) => any)>();
     if (handlerRef.val === null) {
         handlerRef.val = listener;
         r.root.addEventListener(type, (e) => {
@@ -1259,4 +1458,23 @@ export function imEvent<K extends keyof HTMLElementEventMap>(
     } else {
         handlerRef.val = listener;
     }
+}
+
+export function init(): boolean {
+    const r = getCurrentRoot();
+    if (!r.init) {
+        r.init = true;
+        return true;
+    }
+    return false;
+}
+
+export function attributes(attrs: Attrs) {
+    const r = getCurrentRoot();
+
+    // When elementSupplier is null, this is because the root is not the 'owner' of a particular DOM element - 
+    // rather, we got it from a ListRenderer somehow - setting attributes on these roots is usually a mistake
+    assert(r.elementSupplier !== null);
+
+    setAttributes(r.root, attrs);
 }
