@@ -661,7 +661,10 @@ export class UIRoot<E extends ValidElement = ValidElement> {
         assert(this.began);
         this.began = false;
 
-        pop();
+        const val = pop();
+
+        // You may have forgotten to call end();
+        assert(val === this);
 
         if (this.items.expectedLength === -1) {
             imLockSize(this.items);
@@ -674,6 +677,8 @@ export class UIRoot<E extends ValidElement = ValidElement> {
     }
 
     setStyle<K extends (keyof E["style"])>(key: K, value: string) {
+        this.assertNotDerived();
+
         // @ts-expect-error it sure can
         this.root.style[key] = value;
         return this;
@@ -682,6 +687,8 @@ export class UIRoot<E extends ValidElement = ValidElement> {
 
     // NOTE: the effect of this method will persist accross renders
     setClass(val: string, enabled: boolean = true) {
+        this.assertNotDerived();
+
         if (enabled) {
             this.root.classList.add(val);
         } else {
@@ -692,18 +699,31 @@ export class UIRoot<E extends ValidElement = ValidElement> {
     readonly c = this.setClass;
 
     text(value: string) { 
+        setChildAtEl
         // don't overwrite the real children!
         assert(!this.hasRealChildren);
 
-        if (this.root.textContent !== value) {
+        this.assertNotDerived();
+
+        if (this.root.childNodes.length === 0) {
             this.root.textContent = value;
+        } else {
+            const textNode = this.root.childNodes[0];
+            textNode.nodeValue = value;
         }
     }
 
     setAttribute(attr: string, val: string | null) {
+        this.assertNotDerived();
         return setAttribute(this.root, attr, val);
     }
     readonly a = this.setAttribute;
+
+    assertNotDerived() {
+        // When elementSupplier is null, this is because the root is not the 'owner' of a particular DOM element - 
+        // rather, we got it from a ListRenderer somehow - setting attributes on these roots is usually a mistake
+        assert(this.elementSupplier !== null);
+    }
 
     // NOTE: If this is being called before we've rendered any components here, it should be ok.
     // if it's being called during a render, then that is typically an incorrect usage - the domRoot's index may or may not be incorrect now, because
@@ -748,10 +768,11 @@ export class ListRenderer {
             v.rendered = false;
         }
         this.current = null;
+        push(this);
     }
 
     /** Use this for a keyed list renderer */
-    withRootKey(key: string | number, fn: () => void) {
+    __getForKey(key: string | number) {
         let result = this.keys.get(key);
         if (!result) {
             result = { 
@@ -763,63 +784,56 @@ export class ListRenderer {
             // Don't render same list element twice in single render pass, haiyaaaa
 
             assert(!result.rendered);
-        }
-
-        this.appendRootResult(result.root);
-        result.rendered = true;
-        this.current = result.root;
-
-        fn();
-
-        if (!result.root.removed) {
-            result.root.__end();
-        } else {
-            pop();
-        }
-
-        return result.root;
-    }
-
-    withRoot(fn: () => void) {
-        const idx = this.builderIdx;
-
-        // DEV: whenever this.builderIdx === this.builders.length, we should append another builder to the list
-        assert(idx <= this.builders.length);
-
-        let result;
-        if (idx < this.builders.length) {
-            result = this.builders[idx];
-        } else {
-            result = new UIRoot(this.uiRoot.domRoot, null);
-            this.builders.push(result);
-        }
-
-        this.appendRootResult(result);
-        this.current = result;
-        this.builderIdx++;
-
-        fn();
-
-        if (!result.removed) {
-            result.__end();
-        } else {
-            pop();
+            result.rendered = true;
         }
 
         return result;
     }
 
-    appendRootResult(result: UIRoot) {
+    // This method automatically calls end() on the last root
+    root(key?: string) {
+        const idx = this.builderIdx;
+
+        // DEV: whenever this.builderIdx === this.builders.length, we should append another builder to the list
+        assert(idx <= this.builders.length);
+
+        const r = getCurrentStackItemInternal();
+
+        // you also need to call end() after grabbing a root. 
+        assert(r === this);
+
+        let result;
+        if (key) {
+            result = this.__getForKey(key).root;
+        } else {
+            if (idx < this.builders.length) {
+                result = this.builders[idx];
+            } else {
+                result = new UIRoot(this.uiRoot.domRoot, null);
+                this.builders.push(result);
+            }
+        }
+
         // Append new list elements to where we're currently appending
         const currentDomRootIdx = result.domRoot.currentIdx;
         result.__begin(undefined);
         result.domRoot.currentIdx = currentDomRootIdx;
+
+        this.current = result;
+        this.builderIdx++;
+
+        return result;
     }
 
-    end() {
+    __end() {
         // DEV: don't decrement this more times than you increment it
         assert(this.uiRoot.openListRenderers > 0);
         this.uiRoot.openListRenderers--;
+
+        const val = pop();
+
+        // You may have forgotten to call end();
+        assert(val === this);
 
         // remove all the UI components that may have been added by other builders in the previous render.
         for (let i = this.builderIdx; i < this.builders.length; i++) {
@@ -855,7 +869,7 @@ export type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot<T>) => 
 export type RenderFnArgs<A extends unknown[], T extends ValidElement = ValidElement> = (r: UIRoot<T>, ...args: A) => void;
 
 export function beginList(): ListRenderer {
-    const r = getCurrentRoot();
+    const r = getCurrentRootInternal();
 
     let result = imGetNext(r.items);
     if (!result) {
@@ -870,6 +884,11 @@ export function beginList(): ListRenderer {
     result.v.__begin();
 
     return result.v as ListRenderer;
+}
+
+export function nextRoot(key?: string) {
+    const l = getCurrentListRendererInternal();
+    return l.root(key);
 }
 
 /**
@@ -921,19 +940,6 @@ export function beginList(): ListRenderer {
  * and because you're keying the list on the type, you can be sure that subsequent renders
  * on the same root will always be with the same component.
  */
-export function imList(listRenderFn: (l: ListRenderer) => void, openIfWhenEmpty: boolean = true) {
-    const r = getCurrentRoot();
-
-    const list = beginList();
-    listRenderFn(list);
-    list.end();
-
-
-    if (list.current === null && openIfWhenEmpty) {
-        r.ifStatementOpen = true;
-    }
-}
-
 
 export function newRerenderPoint(): RerenderPoint {
     return { domRootIdx: 0, itemsIdx: 0,  };
@@ -952,7 +958,7 @@ function imRerenderPoint(r: UIRoot, offset: number): RerenderPoint {
 ///////// Common immediate mode UI helpers
 
 function imStateInternal<T>(supplier: () => T, skipSupplierCheck: boolean): T {
-    const r = getCurrentRoot();
+    const r = getCurrentRootInternal();
     // Don't render new elements to this thing when you have a list renderer that is active!
     // render to that instead.
     assert(r.openListRenderers === 0);
@@ -1010,22 +1016,37 @@ export function imStateInline<T>(supplier: () => T): T {
 }
 
 let appRoot: UIRoot = newUiRoot(() => document.body);
-const currentStack: UIRoot[] = [];
+const currentStack: (UIRoot | ListRenderer)[] = [];
 export function setUiRoot(r: UIRoot) {
     assert(currentStack.length <= 1);
     appRoot = r;
     currentStack[0] = appRoot;
 }
 
-export function getCurrentRoot(): UIRoot {
+// You probably don't want to use this, if you can help it
+export function getCurrentStackItemInternal() {
     return currentStack[currentStack.length - 1];
 }
 
-function push(r: UIRoot) {
+// You probably don't want to use this, if you can help it
+export function getCurrentRootInternal(): UIRoot {
+    const val = getCurrentStackItemInternal();
+    assert(val instanceof UIRoot);
+    return val;
+}
+
+// You probably don't want to use this, if you can help it
+export function getCurrentListRendererInternal(): ListRenderer {
+    const val = getCurrentStackItemInternal();
+    assert(val instanceof ListRenderer);
+    return val;
+}
+
+function push(r: UIRoot | ListRenderer) {
     currentStack.push(r);
 }
 function pop() {
-    currentStack.pop();
+    return currentStack.pop();
 }
 
 export function startRendering(r: UIRoot = appRoot, rp?: RerenderPoint) {
@@ -1033,8 +1054,8 @@ export function startRendering(r: UIRoot = appRoot, rp?: RerenderPoint) {
     r.__begin(rp);
 }
 
-export function el<E extends ValidElement = ValidElement>(elementSupplier: () => E, next?: () => void): UIRoot<E> {
-    const r = getCurrentRoot();
+export function el<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
+    const r = getCurrentRootInternal();
 
     // Don't render new elements to this thing when you have a list renderer that is active!
     // render to that instead.
@@ -1074,12 +1095,13 @@ export function el<E extends ValidElement = ValidElement>(elementSupplier: () =>
     // Then I would.
     // ```
 
-    next?.();
-
-    result.v.__end();
-
     return result.v as UIRoot<E>;
 } 
+
+export function end() {
+    const val = currentStack[currentStack.length - 1];
+    val.__end();
+}
 
 function setAttribute(e: ValidElement, attr: string, val: string | null) {
     if (val !== null) {
@@ -1111,7 +1133,7 @@ type Attrs = Record<string, string | string[] | undefined> & {
     class?: string[];
 };
 
-function setAttributes(element: ValidElement, attrs: Attrs) {
+function setAttributesInternal(element: ValidElement, attrs: Attrs) {
     for (const attr in attrs) {
         let val = attrs[attr];
         if (val === undefined) {
@@ -1135,7 +1157,7 @@ export function newDomElement<K extends keyof HTMLElementTagNameMap>(
 ): HTMLElementTagNameMap[K] {
     const element = document.createElement(tagName);
     if (attrs) {
-        setAttributes(element, attrs);
+        setAttributesInternal(element, attrs);
     }
     return element;
 }
@@ -1148,18 +1170,18 @@ export function newSpan() {
     return newDomElement("span");
 }
 
-export function div(next?: () => void): UIRoot<HTMLDivElement> {
-    return el<HTMLDivElement>(newDiv, next);
+export function div(): UIRoot<HTMLDivElement> {
+    return el<HTMLDivElement>(newDiv);
 }
 
 export function text(str: string) {
-    const r = getCurrentRoot();
+    const r = getCurrentRootInternal();
     r.text(str);
 }
 
 
-export function span(next?: () => void): UIRoot<HTMLSpanElement> {
-    return el<HTMLSpanElement>(newSpan, next);
+export function span(): UIRoot<HTMLSpanElement> {
+    return el<HTMLSpanElement>(newSpan);
 }
 
 
@@ -1197,7 +1219,7 @@ type ActualFalseyValues = null | undefined | false;
  * ```
  */
 export function imIf<V>(val: V | ActualFalseyValues, next: (typeNarrowedVal: V) => void) {
-    const r = getCurrentRoot();
+    const r = getCurrentRootInternal();
     r.ifStatementOpen = true;
     imElseIf(val, next);
 }
@@ -1213,21 +1235,22 @@ export function imElse(next: () => void) {
  * See {@link imIf}
  */
 export function imElseIf<V>(val: V | ActualFalseyValues, next: (typeNarrowedVal: V) => void) {
-    const rIn = getCurrentRoot();
-    console.log(rIn);
-    imList(l => {
+    const rIn = getCurrentRootInternal();
+    const l = beginList(); {
         const domRootIdx = rIn.domRoot.currentIdx;
 
         if (rIn.ifStatementOpen && (val || val === 0 || val === "")) {
             rIn.ifStatementOpen = false;
-            l.withRoot(() => {
+            nextRoot(); {
                 next(val);
-            });
+            }
+            end();
         } else {
             l.__removeAllDomElementsFromList();
             rIn.domRoot.currentIdx = domRootIdx;
         }
-    }, false);
+    }
+    end();
 }
 
 function canAnimate(r: UIRoot) {
@@ -1268,7 +1291,7 @@ function canAnimate(r: UIRoot) {
  * care to navigate here and read it...
  */
 export function imRerenderable(fn: (rerender: () => void) => void) {
-    const r = getCurrentRoot();
+    const r = getCurrentRootInternal();
     const rerenderPoint = imRerenderPoint(r, FROM_HERE);
     fn(() => {
         startRendering(r, rerenderPoint);
@@ -1288,7 +1311,7 @@ function newRealtimeState(): {
 
 export function realtime(fn: (dt: number) => void) {
     imRerenderable((rerender) => {
-        const r = getCurrentRoot();
+        const r = getCurrentRootInternal();
 
         const state = imState(newRealtimeState);
         if (!state.animation) {
@@ -1317,7 +1340,7 @@ function newIntermittentState() : {
 
 export function intermittent(fn: RenderFn, ms: number) {
     imRerenderable((rerender) => {
-        const r = getCurrentRoot();
+        const r = getCurrentRootInternal();
         const state = imState(newIntermittentState);
         state.ms = ms;
         if (!state.animation) {
@@ -1356,8 +1379,16 @@ export function imErrorBoundary(
         }
 
         try {
-            l.withRoot(renderFnNormal);
+            nextRoot(); {
+                renderFnNormal();
+            }
+            end();
         } catch (error) {
+            // need to wind the stack back to the current list component
+            const idx = currentStack.lastIndexOf(l);
+            assert(idx !== -1);
+            currentStack.length = idx + 1;
+
             const r = l.current;
             if (r) {
                 r.__removeAllDomElements();
@@ -1366,11 +1397,12 @@ export function imErrorBoundary(
                 resetDomRoot(r.domRoot);
             }
 
-            l.withRoot(() => {
+            nextRoot(); {
                 renderFnError(error, recover);
-            });
+            };
+            end();
         } finally {
-            l.end();
+            end();
         }
     });
 }
@@ -1439,13 +1471,17 @@ export function imMemo() {
 /**
  * Seems like simply doing r.root.onwhatever = () => { blah } destroys performance,
  * so this  method exists now...
+ *
+ * // TODO: we should also remove the event handlers at some point.
+ * // I haven't found a need to ever do it, but supposedly it causes memory leaks.
+ * // Which, if you think about how a garbage collector is supposed to work, makes no sense. But that's javascript for ya
  */
 export function imOn<K extends keyof HTMLElementEventMap>(
     type: K,
     listener: (this: HTMLElement, ev: HTMLElementEventMap[K]) => any,
     options?: boolean | AddEventListenerOptions
 ) {
-    const r = getCurrentRoot();
+    const r = getCurrentRootInternal();
     const handlerRef = imRef<((ev: HTMLElementEventMap[K]) => any)>();
     if (handlerRef.val === null) {
         handlerRef.val = listener;
@@ -1461,7 +1497,7 @@ export function imOn<K extends keyof HTMLElementEventMap>(
 }
 
 export function init(): boolean {
-    const r = getCurrentRoot();
+    const r = getCurrentRootInternal();
     if (!r.init) {
         r.init = true;
         return true;
@@ -1469,12 +1505,20 @@ export function init(): boolean {
     return false;
 }
 
-export function attributes(attrs: Attrs) {
-    const r = getCurrentRoot();
-
+export function setAttributes(attrs: Attrs, r = getCurrentRootInternal()) {
     // When elementSupplier is null, this is because the root is not the 'owner' of a particular DOM element - 
     // rather, we got it from a ListRenderer somehow - setting attributes on these roots is usually a mistake
     assert(r.elementSupplier !== null);
 
-    setAttributes(r.root, attrs);
+    setAttributesInternal(r.root, attrs);
+}
+
+export function attr<T extends keyof Attrs>(k: T, v: string | null) {
+    const r = getCurrentRootInternal();
+    r.setAttribute(k, v);
+}
+
+export function style<K extends (keyof ValidElement["style"])>(key: K, value: string) {
+    const r = getCurrentRootInternal();
+    r.setStyle(key, value);
 }

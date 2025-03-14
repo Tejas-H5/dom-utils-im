@@ -1,12 +1,17 @@
-import { 
-    getCurrentNumAnimations, 
-    imOn, 
-    div, el, imState, imRerenderable, imList, realtime, imErrorBoundary, imIf, imElse, imElseIf, newUiRoot,
+import {
+    getCurrentNumAnimations,
+    imOn,
+    div, el, imState, imRerenderable, realtime, imErrorBoundary, imIf, imElse, imElseIf, newUiRoot,
     text,
     startRendering,
     init,
-    attributes,
-    getCurrentRoot, 
+    end,
+    setAttributes,
+    attr,
+    beginList,
+    nextRoot,
+    style,
+    getCurrentRootInternal,
 } from "src/utils/im-dom-utils";
 
 function newInput() {
@@ -14,7 +19,7 @@ function newInput() {
 }
 
 function newButton() {
-     return document.createElement("button");
+    return document.createElement("button");
 }
 
 function newLabel() {
@@ -22,38 +27,50 @@ function newLabel() {
 }
 
 function Button(buttonText: string, onClick: () => void) {
-    return div(() => {
-        const b = el(newButton, () => {
+    let button;
+
+    div(); {
+        button = el(newButton); {
+            text(buttonText);
             imOn("click", onClick);
-        });
-        b.text(buttonText);
-    });
+        };
+        end();
+    }
+    end();
+
+    return button;
 }
 
 function Slider(labelText: string, onChange: (val: number) => void) {
-    return div(() => {
-        el(newLabel, () => {
-            init() && attributes({
+    const root = div(); {
+        el(newLabel); {
+            init() && setAttributes({
                 for: labelText
             })
 
-            const r = getCurrentRoot();
-            r.a("for", labelText);
+            attr("for", labelText);
 
             text(labelText);
-        });
+        };
+        end();
 
-        const input = el<HTMLInputElement>(newInput, () => {
-            const r = getCurrentRoot();
-            r.s("width", "1000px")
-            r.a("name", labelText)
-            r.a("type", "range")
-            r.a("min", "1"); r.a("max", "300"); r.a("step", "1");
+        const input = el<HTMLInputElement>(newInput); {
+            init() && setAttributes({
+                style: "width: 1000px",
+                type: "range",
+                min: "1", max: "300", step: "1",
+            });
+
+            attr("name", labelText)
             imOn("input", () => {
                 onChange(input.root.valueAsNumber);
             });
-        });
-    });
+        }
+        end();
+    }
+    end();
+
+    return root;
 }
 
 function newWallClockState() {
@@ -68,27 +85,34 @@ function WallClock() {
         if (value.val > 1) value.val = 1;
         if (value.val < -1) value.val = -1;
 
-        div(() => {
-            const r = getCurrentRoot();
-            div().text("Removed: " + r.removed);
-        });
-        div(() => {
-            text("brownian motion: " + value.val + "");
-        });
-        div(() => {
-            text("FPS: " + (1 / dt).toPrecision(2) + "");
-        });
-        imList(l => {
-            let n = value.val < 0 ? 1 : 2;
-
-            for (let i = 0; i < n; i++) {
-                l.withRoot(() => {
-                    div(() => {
-                        text(new Date().toISOString());
-                    });
-                });
+        div(); {
+            div(); {
+                const r = getCurrentRootInternal();
+                text("Removed: " + r.removed);
             }
-        });
+            end();
+        }
+        end();
+        div(); {
+            text("brownian motion: " + value.val + "");
+        }
+        end();
+        div(); {
+            text("FPS: " + (1 / dt).toPrecision(2) + "");
+        }
+        end();
+        beginList();
+        let n = value.val < 0 ? 1 : 2;
+        for (let i = 0; i < n; i++) {
+            nextRoot(); {
+                div();  {
+                    text(new Date().toISOString());
+                }
+                end();
+            }
+            end();
+        }
+        end();
     });
 }
 
@@ -113,7 +137,7 @@ function resize(values: number[][], gridRows: number, gridCols: number) {
 
 function newAppState() {
     const s = {
-        rerender: () => {},
+        rerender: () => { },
 
         period: 2,
         setPeriod(val: number) {
@@ -160,45 +184,65 @@ function App() {
         s.rerender = rerender;
 
         imErrorBoundary(() => {
-            div(() => {
+            div(); {
                 Button("Click me!", () => {
                     alert("noo");
                 });
-                div().text("Hello world! ");
-                div().text("Lets go! ");
-                div().text("Count: " + s.count);
-                div().text("Period: " + s.period);
-                realtime(() =>
-                    div().text("Realtime animations in progress: " + getCurrentNumAnimations())
-                );
+                div(); {
+                    text("Hello world! ");
+                }
+                end();
+                div(); {
+                    text("Lets goo");
+                }
+                end();
+                div(); {
+                    text("Count: " + s.count);
+                }
+                end();
+                div(); {
+                    text("Period: " + s.period);
+                }
+                end();
+                realtime(() => {
+                    div(); {
+                        text("Realtime animations in progress: " + getCurrentNumAnimations())
+                    }   
+                    end();
+                });
 
                 // sheesh. cant win with these people...
                 imIf(s.count > 1000, () => {
-                    div().text("The count is too damn high!!");
+                    div(); {
+                        text("The count is too damn high!!");
+                    }
+                    end();
                 });
                 imElseIf(s.count < 1000, () => {
-                    div().text("The count is too damn low !!");
+                    div(); {
+                        text("The count is too damn low !!");
+                    }
+                    end();
                 });
                 imElse(() => {
-                    div().text("The count is too perfect!!");
+                    div(); {
+                        text("The count is too perfect!!");
+                    }
+                    end();
                 });
 
-                div(() => {
-                    const r = getCurrentRoot();
-                    if (init()) {
-                        r.s("height", "5px");
-                        r.s("backgroundColor", "black");
-                    }
-                });
+                div(); {
+                    init() && setAttributes({
+                        style: "height: 5px; background-color: black"
+                    });
+                }
+                end();
 
 
-                div(() => {
-                    const r = getCurrentRoot();
-                    if (init()) {
-                        r.s("padding", "10px");
-                        r.s("border", "1px solid black");
-                        r.s("display", "inline-block");
-                    }
+                div(); {
+                    init() && setAttributes({
+                        style: "padding: 10px; border: 1px solid black; display: inline-block",
+                    });
 
                     if (s.count < 500) {
                         throw new Error("The count was way too low my dude");
@@ -206,30 +250,12 @@ function App() {
 
                     imIf(s.count < 2000, () => {
                         WallClock();
-                    })
-                })
-
-            });
-
-            /**
-            list(r, l => {
-                for (let i = 0; i < 10; i++) {
-                    const r = l.getNext();
-                    // totally redundant list. I'm just testing the framework tho.
-                    list(r, l => {
-                        for (let i = 0; i < s.count / 10; i++) {
-                            const r = l.getNext();
-                            span(() => {
-                                text(r, "A");
-    
-                                r.isFirstRenderCall && r.s("display", "inline-block");
-                                r.s("transform", `translateY(${Math.sin(s.t + (2 * Math.PI * (i / s.period))) * 50}px)`);
-                            });
-                        }
                     });
                 }
-            });
-            */
+                end();
+
+            }
+            end();
 
             imIf(s.grid, () => {
                 const gridState = imState(newGridState);
@@ -237,56 +263,59 @@ function App() {
                 realtime((dt) => {
                     const { values } = gridState;
 
-                    imList(l => {
-                        for (let i = 0; i < values.length; i++) {
-                            l.withRoot(() => {
-                                div(() => {
-                                    const r = getCurrentRoot();
-                                    if (init()) {
-                                        r.s("display", "flex");
-                                    }
+                    beginList();
+                    for (let i = 0; i < values.length; i++) {
+                        nextRoot(); {
+                            div(); {
+                                init() && setAttributes({
+                                    style: "display: flex;"
+                                });
 
-                                    imList(l => {
-                                        for (let j = 0; j < values[i].length; j++) {
-                                            l.withRoot(() => {
-                                                div(() => {
-                                                    const r = getCurrentRoot();
-                                                    if (init()) {
-                                                        r.s("display", "inline-block");
-                                                        r.s("width", "5px");
-                                                        r.s("height", "5px");
-                                                    }
-
-                                                    // NOTE: usually you would do this with a CSS transition if you cared about performance, but
-                                                    // I'm just trying out some random stuff.
-                                                    let val = values[i][j];
-                                                    if (val > 0) {
-                                                        val -= dt;
-                                                        if (val < 0) {
-                                                            val = 0;
-                                                        }
-                                                        values[i][j] = val;
-                                                        r.s("backgroundColor", `rgba(0, 0, 0, ${val})`);
-                                                    }
-
-                                                    imOn("mousemove", () => {
-                                                        values[i][j] = 1;
-                                                        // rerender();
-                                                    });
+                                beginList(); 
+                                for (let j = 0; j < values[i].length; j++) {
+                                    nextRoot(); {
+                                        div(); {
+                                            if (init()) {
+                                                setAttributes({
+                                                    style: "display: inline-block; width: 5px; height: 5px"
                                                 });
+                                            }
+
+                                            // NOTE: usually you would do this with a CSS transition if you cared about performance, but
+                                            // I'm just trying out some random stuff.
+                                            let val = values[i][j];
+                                            if (val > 0) {
+                                                val -= dt;
+                                                if (val < 0) {
+                                                    val = 0;
+                                                }
+                                                values[i][j] = val;
+                                                style("backgroundColor", `rgba(0, 0, 0, ${val})`);
+                                            }
+
+                                            imOn("mousemove", () => {
+                                                values[i][j] = 1;
+                                                // rerender();
                                             });
                                         }
-                                    })
-                                })
-                            });
+                                        end();
+                                    }
+                                    end();
+                                }
+                                end();
+                            }
+                            end();
                         }
-                    })
+                        end();
+                    }
+                    end();
                 });
-            })
+            });
 
-            div(() => {
-                const r = getCurrentRoot();
-                init() && r.a("style", `position: fixed; bottom: 10px; left: 10px`);
+            div(); {
+                init() && setAttributes({
+                   style: `position: fixed; bottom: 10px; left: 10px`
+                });
 
                 Slider("period", s.setPeriod);
                 Slider("increment", s.setIncrement);
@@ -294,33 +323,46 @@ function App() {
                 Button("Increment count", s.incrementCount);
                 Button("Refresh", rerender);
                 Button("Decrement count", s.decrementCount);
-            });
+            }
+            end();
+
         }, (error, recover) => {
             console.error(error);
 
-            div(() => {
-                const r = getCurrentRoot();
-                init() && r.a("style", `display: absolute;top:0;bottom:0;left:0;right:0;`);
+            div(); {
+                init() && setAttributes({
+                    style: `display: absolute;top:0;bottom:0;left:0;right:0;`
+                });
 
-                div(() => {
-                    const r = getCurrentRoot();
-                    r.a("style", `display: flex; flex-direction: column; align-items: center; justify-content: center;`);
+                div(); {
+                    init() && setAttributes({
+                        style: `display: flex; flex-direction: column; align-items: center; justify-content: center;`
+                    });
 
-                    div(() => text("An error occured"));
-                    div(() => text("Click below to retry."));
+                    div(); {
+                        text("An error occured");
+                    }
+                    end();
+                    div(); {
+                        text("Click below to retry.")
+                    }
+                    end();
+
                     Button("Retry", () => {
                         s.count = 1000;
 
                         recover();
                     });
-                });
-            });
-        })
+                }
+                end();
+            }
+            end();
+        });
     });
 }
 
 const appRoot = newUiRoot(() => document.body);
-function rerenderApp() { 
+function rerenderApp() {
     startRendering(appRoot);
     App();
 }

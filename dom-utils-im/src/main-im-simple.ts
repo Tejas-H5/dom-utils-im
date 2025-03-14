@@ -1,51 +1,60 @@
-import { div, imElse, imElseIf, imIf, imList, imOn, imRerenderable, startRendering, text } from "./utils/im-dom-utils";
+import { beginList, div, end, imElse, imElseIf, imIf, imOn, imRerenderable, startRendering, text } from "./utils/im-dom-utils";
 
 let count = 0;
 function App() {
     imRerenderable(rerender => {
-        div(() => {
-            div(() => {
+        div(); {
+            div(); {
                 text("count: " + count);
-            });
+            }
+            end();
             imIf(count < 1, () => {
-                div(() => {
+                div(); {
                     text("too low smh");
-                })
+                }
+                end();
             });
             imElseIf(count > 1, () => {
-                div(() => {
+                div(); {
                     text("Too high");
-                })
+                }
+                end();
             });
             imElse(() => {
-                div(() => {
+                div(); {
                     text("Finally, some good count");
-                })
-            });
-            imList(l => {
-                for (let i = 0; i < count; i++) {
-                    l.withRoot(() => {
-                        div(() => {
-                            text("item " + i);
-                        });
-                    });
                 }
+                end();
             });
-            div(() => {
+            const l = beginList(); 
+            for (let i = 0; i < count; i++) {
+                l.root(); {
+                    div(); {
+                        text("item " + i);
+                    };
+                    end();
+                };
+                end();
+            }
+            end();
+            div(); {
                 text("click me!");
                 imOn("click", () => {
                     count++;
                     rerender();
                 });
-            });
-            div(() => {
+            };
+            end();
+            div(); {
                 text("dont click me! xd");
                 imOn("click", () => {
                     count--;
                     rerender();
                 });
-            });
-        });
+            };
+            end();
+        };
+        end();
     });
 }
 
