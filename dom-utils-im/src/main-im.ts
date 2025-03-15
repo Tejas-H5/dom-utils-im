@@ -1,14 +1,14 @@
 import {
     getCurrentNumAnimations,
     imOn,
-    div, el, imState, imRerenderable, realtime, imErrorBoundary, imIf, imElse, imElseIf, newUiRoot,
+    div, el, imState, imRerenderable, realtime, imTryCatch, imIf, imElse, imElseIf, newUiRoot,
     text,
     startRendering,
     init,
     end,
     setAttributes,
     attr,
-    beginList,
+    imList,
     nextRoot,
     style,
     getCurrentRootInternal,
@@ -101,7 +101,7 @@ function WallClock() {
             text("FPS: " + (1 / dt).toPrecision(2) + "");
         }
         end();
-        beginList();
+        imList();
         let n = value.val < 0 ? 1 : 2;
         for (let i = 0; i < n; i++) {
             nextRoot(); {
@@ -170,7 +170,7 @@ function newAppState() {
 
 function newGridState() {
     let gridRows = 100;
-    let gridCols = 100;
+    let gridCols = 400;
     const values: number[][] = [];
 
     resize(values, gridRows, gridCols);
@@ -183,120 +183,163 @@ function App() {
         const s = imState(newAppState);
         s.rerender = rerender;
 
-        imErrorBoundary(() => {
-            div(); {
-                Button("Click me!", () => {
-                    alert("noo");
-                });
+        imTryCatch({
+            tryFn: () => {
                 div(); {
-                    text("Hello world! ");
-                }
-                end();
-                div(); {
-                    text("Lets goo");
-                }
-                end();
-                div(); {
-                    text("Count: " + s.count);
-                }
-                end();
-                div(); {
-                    text("Period: " + s.period);
-                }
-                end();
-                realtime(() => {
-                    div(); {
-                        text("Realtime animations in progress: " + getCurrentNumAnimations())
-                    }   
-                    end();
-                });
-
-                // sheesh. cant win with these people...
-                imIf(s.count > 1000, () => {
-                    div(); {
-                        text("The count is too damn high!!");
-                    }
-                    end();
-                });
-                imElseIf(s.count < 1000, () => {
-                    div(); {
-                        text("The count is too damn low !!");
-                    }
-                    end();
-                });
-                imElse(() => {
-                    div(); {
-                        text("The count is too perfect!!");
-                    }
-                    end();
-                });
-
-                div(); {
-                    init() && setAttributes({
-                        style: "height: 5px; background-color: black"
+                    Button("Click me!", () => {
+                        alert("noo");
                     });
-                }
-                end();
-
-
-                div(); {
-                    init() && setAttributes({
-                        style: "padding: 10px; border: 1px solid black; display: inline-block",
+                    div(); {
+                        text("Hello world! ");
+                    }
+                    end();
+                    div(); {
+                        text("Lets goo");
+                    }
+                    end();
+                    div(); {
+                        text("Count: " + s.count);
+                    }
+                    end();
+                    div(); {
+                        text("Period: " + s.period);
+                    }
+                    end();
+                    realtime(() => {
+                        div(); {
+                            text("Realtime animations in progress: " + getCurrentNumAnimations())
+                        }
+                        end();
                     });
 
-                    if (s.count < 500) {
-                        throw new Error("The count was way too low my dude");
-                    }
-
-                    imIf(s.count < 2000, () => {
-                        WallClock();
+                    // sheesh. cant win with these people...
+                    imIf(s.count > 1000, () => {
+                        div(); {
+                            text("The count is too damn high!!");
+                        }
+                        end();
                     });
+                    imElseIf(s.count < 1000, () => {
+                        div(); {
+                            text("The count is too damn low !!");
+                        }
+                        end();
+                    });
+                    imElse(() => {
+                        div(); {
+                            text("The count is too perfect!!");
+                        }
+                        end();
+                    });
+
+                    // again, with the list
+                    imList(); {
+                        if (s.count > 1000) {
+                            nextRoot(1); {
+                                div(); {
+                                    text("The count is too damn high!!");
+                                }
+                                end();
+                            } end();
+                        } else if (s.count === 1001) {
+                            nextRoot(2); {
+                                div(); {
+                                    text("Noo how");
+                                }
+                                end();
+                            }
+                            end();
+                        } else if (s.count < 1000) {
+                            nextRoot(3); {
+                                div(); {
+                                    text("The count is too damn low !!");
+                                }
+                                end();
+                            }
+                            end();
+                        } else {
+                            nextRoot(4); {
+                                div(); {
+                                    text("The count is too perfect!!");
+                                }
+                                end();
+                            }
+                            end();
+                        }
+                    } end();
+
+
+                    div(); {
+                        init() && setAttributes({
+                            style: "height: 5px; background-color: black"
+                        });
+                    }
+                    end();
+
+
+                    div(); {
+                        init() && setAttributes({
+                            style: "padding: 10px; border: 1px solid black; display: inline-block",
+                        });
+
+                        if (s.count < 500) {
+                            throw new Error("The count was way too low my dude");
+                        }
+
+                        imList(); {
+                            if (s.count < 2000) {
+                                nextRoot(1); {
+                                    WallClock();
+                                } end();
+                            }
+                        } end();
+                    }
+                    end();
+
                 }
                 end();
 
-            }
-            end();
-
-            imIf(s.grid, () => {
                 const gridState = imState(newGridState);
+                imIf(s.grid, () => {
+                    realtime((dt) => {
+                        const { values } = gridState;
 
-                realtime((dt) => {
-                    const { values } = gridState;
+                        imList();
+                        for (let i = 0; i < values.length; i++) {
+                            nextRoot(); {
+                                div(); {
+                                    init() && setAttributes({
+                                        style: "display: flex;"
+                                    });
 
-                    beginList();
-                    for (let i = 0; i < values.length; i++) {
-                        nextRoot(); {
-                            div(); {
-                                init() && setAttributes({
-                                    style: "display: flex;"
-                                });
+                                    imList();
+                                    for (let j = 0; j < values[i].length; j++) {
+                                        nextRoot(); {
+                                            div(); {
+                                                if (init()) {
+                                                    setAttributes({
+                                                        style: "display: inline-block; width: 5px; height: 5px"
+                                                    });
 
-                                beginList(); 
-                                for (let j = 0; j < values[i].length; j++) {
-                                    nextRoot(); {
-                                        div(); {
-                                            if (init()) {
-                                                setAttributes({
-                                                    style: "display: inline-block; width: 5px; height: 5px"
-                                                });
-                                            }
-
-                                            // NOTE: usually you would do this with a CSS transition if you cared about performance, but
-                                            // I'm just trying out some random stuff.
-                                            let val = values[i][j];
-                                            if (val > 0) {
-                                                val -= dt;
-                                                if (val < 0) {
-                                                    val = 0;
+                                                    imOn("mousemove", () => {
+                                                        values[i][j] = 1;
+                                                        // rerender();
+                                                    });
                                                 }
-                                                values[i][j] = val;
-                                                style("backgroundColor", `rgba(0, 0, 0, ${val})`);
-                                            }
 
-                                            imOn("mousemove", () => {
-                                                values[i][j] = 1;
-                                                // rerender();
-                                            });
+                                                // NOTE: usually you would do this with a CSS transition if you cared about performance, but
+                                                // I'm just trying out some random stuff.
+                                                let val = values[i][j];
+                                                if (val > 0) {
+                                                    val -= dt;
+                                                    if (val < 0) {
+                                                        val = 0;
+                                                    }
+                                                    values[i][j] = val;
+                                                    style("backgroundColor", `rgba(0, 0, 0, ${val})`);
+                                                }
+                                            }
+                                            end();
                                         }
                                         end();
                                     }
@@ -307,56 +350,56 @@ function App() {
                             end();
                         }
                         end();
-                    }
-                    end();
-                });
-            });
-
-            div(); {
-                init() && setAttributes({
-                   style: `position: fixed; bottom: 10px; left: 10px`
-                });
-
-                Slider("period", s.setPeriod);
-                Slider("increment", s.setIncrement);
-                Button("Toggle grid", s.toggleGrid);
-                Button("Increment count", s.incrementCount);
-                Button("Refresh", rerender);
-                Button("Decrement count", s.decrementCount);
-            }
-            end();
-
-        }, (error, recover) => {
-            console.error(error);
-
-            div(); {
-                init() && setAttributes({
-                    style: `display: absolute;top:0;bottom:0;left:0;right:0;`
+                    });
                 });
 
                 div(); {
                     init() && setAttributes({
-                        style: `display: flex; flex-direction: column; align-items: center; justify-content: center;`
+                        style: `position: fixed; bottom: 10px; left: 10px`
+                    });
+
+                    Slider("period", s.setPeriod);
+                    Slider("increment", s.setIncrement);
+                    Button("Toggle grid", s.toggleGrid);
+                    Button("Increment count", s.incrementCount);
+                    Button("Refresh", rerender);
+                    Button("Decrement count", s.decrementCount);
+                }
+                end();
+
+            },
+            catchFn: (error, recover) => {
+                console.error(error);
+
+                div(); {
+                    init() && setAttributes({
+                        style: `display: absolute;top:0;bottom:0;left:0;right:0;`
                     });
 
                     div(); {
-                        text("An error occured");
+                        init() && setAttributes({
+                            style: `display: flex; flex-direction: column; align-items: center; justify-content: center;`
+                        });
+
+                        div(); {
+                            text("An error occured");
+                        }
+                        end();
+                        div(); {
+                            text("Click below to retry.")
+                        }
+                        end();
+
+                        Button("Retry", () => {
+                            s.count = 1000;
+
+                            recover();
+                        });
                     }
                     end();
-                    div(); {
-                        text("Click below to retry.")
-                    }
-                    end();
-
-                    Button("Retry", () => {
-                        s.count = 1000;
-
-                        recover();
-                    });
                 }
                 end();
             }
-            end();
         });
     });
 }

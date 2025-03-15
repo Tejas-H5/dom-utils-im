@@ -2,39 +2,27 @@
 // A variation on DOM-utils with the immediate-mode API isntead of the normal one. I'm still deciding which one I will continue to use.
 // Right now, this one seems better, but the other one has a 'proven' track record of actually working.
 // But in a matter of hours/days, I was able to implement features in this framework that I wasn't able to for months/years in the other one...
-
-import { RenderGroup } from "./dom-utils";
+//
+// TODO: prune documentation
 
 //////////
 // Assertion functions
 
 /**
- * Asserts are used here to catch developer mistakes. 
+ * Assertions are used to catch bugs.
+ * Making this a no-op will sometimes improve performance. But I am not sure you want to do that just yet. 
+ * Wait for me to add a comprehensive suite of tests for this framework before you do that.
  *
- * You might want to make this a No-op in production builds, for performance.
- * Apparently, it makes a pretty big difference - a lot of string comparisions like `assert(type === lastType)` seem to tank performance, 
- * but they seem to be optimized out when this thing just early-returns `true`.
- *
- * Every assertion in the library code (and not necessarily user code) should have a comment above it explaining why it's there, to make
- * debugging for users easier. This is also why I don't bother printing a different debug message per assertion -
- * you should be able to break on these in the debugger and see a more descriptive comment,
- * which can also be removed in production code.
- * Some asserts have DEV: in front of them. They exist to catch errors in the library code that I wrote, and not in user code that you wrote.
+ * Every assertion should have a comment above it explaining why it's there, to make
+ * debugging for users easier. It also means the final minimized code without comments doesn't have
+ * a bunch of long error strings in there increasing it's size, and that
+ * you only need to put a breakpoint here to respond to the vast majority of failures.
  */
 export function assert(value: unknown): asserts value {
     if (!value) {
         throw new Error("Assertion failed");
     }
 }
-
-function userError(): never {
-    throw new Error("User error");
-}
-
-function devError(): never {
-    throw new Error("Dev error");
-}
-
 
 //////////
 // initialize the 'framework'
@@ -610,6 +598,36 @@ export type RerenderPoint =  {
     itemsIdx: number;
 }
 
+/**
+ * This class builds an immediate-mode tree, and stores immediate mode state for a component.
+ * See {@link ImmediateModeArray} to learn what 'immediate mode state' is. 
+ *
+ * Once a UIRoot is created, it has no specific shape. However, once a function has completed
+ * rendering to it, it will call __end() on this root, and cause it to lock it's
+ * shape. From that point onwards, it is assumed (and heavily asserted) that every subsequent rerender to a particular
+ * root happens with the same function as the first render.
+ *
+ * This allows state and DOM-nodes to be created just once, while allowing other code and computations to remain local to 
+ * the place that is actually using it. 
+ *
+ * However, it means that you can't do basic things like this:
+ *
+ * ```ts
+ * function Component(val: number) {
+ *      if (number > 10) {
+ *          Component1();
+ *      } else {
+ *          Component2();
+ *      }
+ * }
+ * ```
+ *
+ * Because more likely than not, Component1 and Component2 will have completly different state and dom elements.
+ * You'll need to use a different UI root to render different types of components.
+ *
+ * There are a couple solutions to this.
+ * See the docuemntation for {@link imIf}, {@link imSwitch}, {@link imList} for more info.
+ */
 export class UIRoot<E extends ValidElement = ValidElement> {
     readonly root: E;
     readonly domRoot: DomRoot<E>;
@@ -750,9 +768,11 @@ export class UIRoot<E extends ValidElement = ValidElement> {
 
 // TODO: keyed list renderer. It will be super useful, for type narrowing with switch statements.
 
+type ValidKey = string | number | Function | object;
+
 export class ListRenderer {
     uiRoot: UIRoot;
-    keys = new Map<string | number, { root: UIRoot, rendered: boolean }>();
+    keys = new Map<ValidKey, { root: UIRoot, rendered: boolean }>();
     builders: UIRoot[] = [];
     builderIdx = 0;
     current: UIRoot | null = null;
@@ -772,7 +792,7 @@ export class ListRenderer {
     }
 
     /** Use this for a keyed list renderer */
-    __getForKey(key: string | number) {
+    __getForKey(key: ValidKey) {
         let result = this.keys.get(key);
         if (!result) {
             result = { 
@@ -782,21 +802,16 @@ export class ListRenderer {
             this.keys.set(key, result);
         } else {
             // Don't render same list element twice in single render pass, haiyaaaa
-
             assert(!result.rendered);
-            result.rendered = true;
         }
+
+        result.rendered = true;
 
         return result;
     }
 
     // This method automatically calls end() on the last root
-    root(key?: string) {
-        const idx = this.builderIdx;
-
-        // DEV: whenever this.builderIdx === this.builders.length, we should append another builder to the list
-        assert(idx <= this.builders.length);
-
+    root(key?: ValidKey) {
         const r = getCurrentStackItemInternal();
 
         // you also need to call end() after grabbing a root. 
@@ -806,12 +821,19 @@ export class ListRenderer {
         if (key) {
             result = this.__getForKey(key).root;
         } else {
+            const idx = this.builderIdx;
+
+            // DEV: whenever this.builderIdx === this.builders.length, we should append another builder to the list
+            assert(idx <= this.builders.length);
+
             if (idx < this.builders.length) {
                 result = this.builders[idx];
             } else {
                 result = new UIRoot(this.uiRoot.domRoot, null);
                 this.builders.push(result);
             }
+
+            this.builderIdx++;
         }
 
         // Append new list elements to where we're currently appending
@@ -820,7 +842,6 @@ export class ListRenderer {
         result.domRoot.currentIdx = currentDomRootIdx;
 
         this.current = result;
-        this.builderIdx++;
 
         return result;
     }
@@ -839,12 +860,12 @@ export class ListRenderer {
         for (let i = this.builderIdx; i < this.builders.length; i++) {
             this.builders[i].__removeAllDomElements();
         }
+        this.builders.length = this.builderIdx;
         for (const v of this.keys.values()) {
             if (!v.rendered) {
                 v.root.__removeAllDomElements();
             }
         }
-        this.builders.length = this.builderIdx;
     }
 
     // kinda have to assume that it's valid to remove these elements.
@@ -868,7 +889,37 @@ export function newUiRoot<E extends ValidElement>(supplier: () => E): UIRoot<E> 
 export type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot<T>) => void;
 export type RenderFnArgs<A extends unknown[], T extends ValidElement = ValidElement> = (r: UIRoot<T>, ...args: A) => void;
 
-export function beginList(): ListRenderer {
+/**
+ * Allows you to render a variable number of UI roots at a particular point in your component.
+ * UI Roots that aren't rendered in subsequent renders get removed from the dom when you `end()` a list.
+ *
+ * See {@link nextRoot} for more info.
+ *
+ *
+ * Normal usage:
+ * ```ts
+ * imList();
+ * for (let i = 0; i < n; i++) {
+ *      nextRoot(); {
+ *          RenderComponent();
+ *      } end();
+ * }
+ * end();
+ * ```
+ *
+ * Keyed:
+ *
+ * ```ts
+ * imList();
+ * for (const item of items) {
+ *      nextRoot(item.id); {
+ *          RenderComponent();
+ *      } end();
+ * }
+ * end();
+ * ```
+ */
+export function imList(isConditional = false): ListRenderer {
     const r = getCurrentRootInternal();
 
     let result = imGetNext(r.items);
@@ -876,17 +927,32 @@ export function beginList(): ListRenderer {
         result = imPush(r.items, { t: ITEM_LIST, v: new ListRenderer(r) });
     }
 
-    // The same hooks must be called in the same order every time
     if (result.t !== ITEM_LIST) {
-        userError();
+        // The same hooks must be called in the same order every time
+        assert(false);
     }
 
     result.v.__begin();
 
+    if (!isConditional && result.v.current === null) {
+        // by default, open an if-statement for an `else` if we rendered zero items.
+        r.ifStatementOpen = true;
+    }
+
     return result.v as ListRenderer;
 }
 
-export function nextRoot(key?: string) {
+/**
+ * Read {@link imList}'s doc first for context and examples.
+ *
+ * You can optionally specify a {@link key}.
+ * If no key is present, the same UIRoot that was rendered for the nth call of  nextRoot() will be re-used.
+ * If a key is present, the same UIRoot that was rendered for that particular key will be re-used. Make sure
+ *      to not reuse the same key twice.
+ *
+ * See the {@link UIRoot} docs for more info on what a 'UIRoot' even is, and how to effectively (re)-use them.
+ */
+export function nextRoot(key?: ValidKey) {
     const l = getCurrentListRendererInternal();
     return l.root(key);
 }
@@ -969,14 +1035,14 @@ function imStateInternal<T>(supplier: () => T, skipSupplierCheck: boolean): T {
     } else {
         if (result.t !== ITEM_STATE) {
             // The same hooks must be called in the same order every time
-            userError();
+            assert(false);
         }
 
         if (!skipSupplierCheck && supplier !== result.supplier) {
             // The same hooks must be called in the same order every time.
-            // If you have two hooks for the same kind of state but in a different order, this assertion won't catch that bug.
-            // but I doubt you would ever be writing code like that...
-            userError();
+            // If you have two hooks for state generated by the same supplier, but they were called out of order for some reason, 
+            // this assertion won't catch that bug. I am assuming you won't write code like that...
+            assert(false);
         }
     }
 
@@ -1069,7 +1135,7 @@ export function el<E extends ValidElement = ValidElement>(elementSupplier: () =>
 
     if (result.t !== ITEM_UI_ROOT) {
         // The same hooks must be called in the same order every time
-        userError();
+        assert(false);
     }
 
     // The same hooks must be called in the same order every time.
@@ -1189,33 +1255,42 @@ export function span(): UIRoot<HTMLSpanElement> {
 type ActualFalseyValues = null | undefined | false;
 
 /**
- * You'll need to use this, as well as {@link imElse} and {@link imElseIf} for (most) conditional rendering,
- * so that you're rendering the same amount of im-state entries to a UIRoot at a time.
- * It's just implemented with an imList under the hood, but that might change in the future.
  *
- * This component also does smoe basic type narrowing.
+ * See {@link UIRoot}'s docs to understand why this exists.
  *
- * For switch-like behaviour, you may be able to use a {@link imList} directly - check it's documentation for more info.
+ * If you have any ideas on how to use a callbackless API here that is also easy to use and 
+ * allows us to just use a basic if-statements (they are cool because they do type narrowing and other
+ * typescript stuff), then let me know. 
  *
- * You can also use it after {@link imList} - it will render stuff when the list rendered zero things.
- *
- * Examples:
- *
+ * Typical usage:
  * ```ts
+ * imIf( *** , () => {
+ *      Component1();
+ * })
+ * imElseIf( ***, () => {
+ *      Component2();
+ * })
+ * imElse(() => {
+ *      Component3();
+ * })
+ * ```
  *
- * // basic usage:
- * imIf(condition1, r, r => { ... });
- * imElseIf(condition2, r => { ... });
- * imElse(r, r => { ... });
+ * With lists:
+ * ```ts
+ * imList() {
+ *      for (const item of items) { ... }
+ * } end();
+ * imElse(() => {
+ *      // else after a list is allowed to run when an imList rendered zero items.
+ *      div(); { text("Zero results.") } end();
+ * })
+ * ```
  *
- * // type narrowing
- * imIf(valueOrNull, r, (r, value) => { ... });
- * 
- * // lists
- * imList(...)
- * imElse(r, r => { // this part runs when imList rendered 0 items 
- * });
- *
+ * Type narrowing:
+ * ```ts
+ * imIf(valOrUndefined, (val) => {
+ *      Component(val);  // NOTE: most of the time, we want to render the number 0. so imIf only type-narrows T | null | undefined | false to T.
+ * })
  * ```
  */
 export function imIf<V>(val: V | ActualFalseyValues, next: (typeNarrowedVal: V) => void) {
@@ -1236,59 +1311,44 @@ export function imElse(next: () => void) {
  */
 export function imElseIf<V>(val: V | ActualFalseyValues, next: (typeNarrowedVal: V) => void) {
     const rIn = getCurrentRootInternal();
-    const l = beginList(); {
-        const domRootIdx = rIn.domRoot.currentIdx;
-
+    imList(true); {
         if (rIn.ifStatementOpen && (val || val === 0 || val === "")) {
             rIn.ifStatementOpen = false;
             nextRoot(); {
                 next(val);
             }
             end();
-        } else {
-            l.__removeAllDomElementsFromList();
-            rIn.domRoot.currentIdx = domRootIdx;
         }
     }
     end();
 }
 
+/**
+ * ```ts
+ * imSwitch(result.type, () => {
+ *      switch(result.type) {
+ *          case types.A: return AResultComponent(result);
+ *          case types.B: return BResultComponent(result);
+ *          case types.C: return CResultComponent(result);
+ *      }
+ * })
+ * ```
+ */
+export function imSwitch(key: string | number, switchFn: () => void) {
+    imList(); nextRoot(key);
+    switchFn();
+    end(); end();
+};
+
 function canAnimate(r: UIRoot) {
     return !r.removed && !r.manuallyHidden;
 }
 
-// Old documentation for the hook:
-//
-// The `rerender` method resets `r`'s current immediate mode state index to 1 before the call to `rerenderFn`, and the invokes
-// the render method you passed in. It relies on the fact that every render method will always generate the same number of immediate
-// mode state entries each time, so we can reliably just reset some indicies to what they were before we called them, and then 
-// simply call them again:
-//
-// ```
-// function App(r: UIRoot) {
-//      const rerender = rerenderFn(r, () => App(r));
-// }
-//
-// ```
-//
-// It won't work if you don't call things in the right order. Here's an example that will fail:
-//
-// ```
-// function IWillThrowAnError(r: UIRoot) {
-//      const state = getState(newAppState); 
-//      const rerender = renderFn(r, () => IWillThrowAnError(r));
-// }
-// ```
-//
-// This is because when we generate `rerender`, getState will have bumped the immedate mode index up by 1, so 
-// the index we store will be one higher than what was correct if we wanted to call IWillThrowAnError(r) on the root again.
-
 /**
- * Wrap any component tree you want to the abilit to 'rerender' in this method.
+ * Wrap any component tree you want to the ability to 'rerender' with this method.
  *
- * Due to the way this framework is implemented, I haven't been able to just give you a rerender method on 
- * every UIRoot, unfortunately. There's a big block comment above this JSDoc that explains it, if you 
- * care to navigate here and read it...
+ * Rerendering a component involves resetting immediate mode indices to just before this 
+ * thing was first rendered, and then calling the function you passed in.
  */
 export function imRerenderable(fn: (rerender: () => void) => void) {
     const r = getCurrentRootInternal();
@@ -1366,21 +1426,31 @@ export function intermittent(fn: RenderFn, ms: number) {
 }
 
 
-export function imErrorBoundary(
-    renderFnNormal: () => void,
-    renderFnError: (error: any, recover: () => void) => void,
-) {
-    imRerenderable((rerender) => {
-        const l = beginList();
+// NOTE: currently, if a component rerenders itself deep underneath the error boundary, it
+// can't throw back up to the error boundary. We will have to start remembering the callstack above it
+// to allow for this, so the callbacks abstraction actually makes sense, for now.
 
-        const recover = () => {
-            l.__removeAllDomElementsFromList();
-            rerender();
-        }
+/**
+ * ```ts
+ * // Button component is not included
+ * imTryCatch({
+ *      tryFn: () => { div(); { div(); { throw new Error("bruh") } end(); } end(); }
+ *      catchFn: (err, recover) => { Button("there was an error viewing the content. click here to try again", recover); }
+ * })
+ * ```
+ */
+export function imTryCatch({ 
+    tryFn, catchFn 
+} : {
+    tryFn: () => void,
+    catchFn: (error: any, recover: () => void) => void,
+}) {
+    imRerenderable((rerender) => {
+        const l = imList();
 
         try {
             nextRoot(); {
-                renderFnNormal();
+                tryFn();
             }
             end();
         } catch (error) {
@@ -1397,8 +1467,13 @@ export function imErrorBoundary(
                 resetDomRoot(r.domRoot);
             }
 
+            const recover = () => {
+                l.__removeAllDomElementsFromList();
+                rerender();
+            }
+
             nextRoot(); {
-                renderFnError(error, recover);
+                catchFn(error, recover);
             };
             end();
         } finally {
@@ -1412,9 +1487,16 @@ function newRef<T>(): Ref<T> {
     return { val: null };
 }
 
-// NOTE: Prefer using this for transient UI state rather than actual program state, 
-// and prefer `imState` for actual program state that you're storing locally, so that
-// your refactorings willl be easier. 
+/**
+ * Set the state later in the function:
+ * ```ts
+ * const ref = imRef<HTMLDivElement>();
+ *
+ * ref.current = div().root; {
+ *      text("The div: " + ref.val);
+ * } end();
+ * ```
+ */
 export function imRef<T>(): Ref<T> {
     return imState(newRef as (typeof newRef<T>));
 }

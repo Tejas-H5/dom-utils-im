@@ -1,4 +1,4 @@
-import { beginList, div, end, imElse, imElseIf, imIf, imOn, imRerenderable, startRendering, text } from "./utils/im-dom-utils";
+import { imList, div, end, imOn, imRerenderable, nextRoot, startRendering, text } from "./utils/im-dom-utils";
 
 let count = 0;
 function App() {
@@ -8,25 +8,30 @@ function App() {
                 text("count: " + count);
             }
             end();
-            imIf(count < 1, () => {
-                div(); {
-                    text("too low smh");
+            imList(); {
+                if (count < 1) {
+                    nextRoot(1); {
+                        div(); {
+                            text("too low smh");
+                        } end();
+                    } end();
+                } else if (count > 1) {
+                    nextRoot(2); {
+                        div(); {
+                            text("Too high");
+                        } end();
+                    } end();
+                } else {
+                    nextRoot(3); {
+                        div(); {
+                            text("Finally, some good count");
+                        }
+                        end();
+                    } end();
                 }
-                end();
-            });
-            imElseIf(count > 1, () => {
-                div(); {
-                    text("Too high");
-                }
-                end();
-            });
-            imElse(() => {
-                div(); {
-                    text("Finally, some good count");
-                }
-                end();
-            });
-            const l = beginList(); 
+            }
+            end();
+            const l = imList(); 
             for (let i = 0; i < count; i++) {
                 l.root(); {
                     div(); {

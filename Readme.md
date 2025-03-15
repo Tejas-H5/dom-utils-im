@@ -1,58 +1,56 @@
 # Typescript 'Immediate-Mode' UI framwork
 
 This is my attempt at creating a simple frontend framework with these points:
-- Fast performance characteristics, i.e no V-DOM and diffing
-- Generates as little garbage as possible 
-- Simple to use and understand
-    - may have failed here a little - hopefully my explanation below will suffice
+- High locality of UI code and state
+- Fast performance characteristics, i.e no V-DOM and diffing, and generates as little garbage as possible per render
 - Has an actual callstack that I can use to debug things
 - Flexible enough to write things quickly
-- Ability to colocate all normal code with rendering code as needed
+- Simple enough to use and understand
+    - may have failed here a little - hopefully my explanation below will suffice
 
 The code for an app will look something like this right now:
 
 ```ts
 
-import { UIRoot, div, text, on, el } from "dom-utils-im";
+import { div, text, imOn, el, end, imRerenderable, imState, imIf, startRendering } from "src/utils/im-dom-utils";
 
 function newButton() {
-    document.createElement("button");
+    return document.createElement("button");
 }
 
 function appState() {
     return { count: 0 };
 }
 
-function App(r: UIRoot) {
-    imRerenderable(r, (r, rerender) => {
-        const state = getState(r);
+function App() {
+    imRerenderable((rerender) => {
+        const state = imState(appState);
 
-        div(r, r => {
-            text(r, "Count: " + count);
-        });
+        div(); {
+            text("Count: " + state.count);
+        } end();
 
-        div(r, r => {
-            el(r, newButton, r => {
-                text(r, "Increment");
-                on(r, "click", () => {
+        div(); {
+            el(newButton); {
+                text("Increment");
+                imOn("click", () => {
                     state.count++;
                     rerender();
                 });
-            });
-            text(r, "" + count);
-        });
+            } end();
+        } end();
 
-        If(condition, r, r => {
-            div(r, r => {
-                text(r, "Conditional logicksaldksdj");
-            });
+        imIf(state.count > 10, () => {
+            div(); {
+                text("Count is super high?!? aint no way bruh? ");
+            } end();
         });
     });
 }
 
-const appRoot = newUiRoot(() => document.body);
 function rerenderApp() { 
-    App(appRoot);
+    startRendering();
+    App();
 }
 
 // Kick-start the program by rendering it once.
