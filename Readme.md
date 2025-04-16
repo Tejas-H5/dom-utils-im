@@ -12,7 +12,7 @@ The code for an app will look something like this right now:
 
 ```ts
 
-import { div, text, imOn, el, end, imRerenderable, imState, imIf, startRendering } from "src/utils/im-dom-utils";
+import { imBeginDiv, setInnerText, imBeginEl, imEnd, imState, imBeginList, nextListRoot, startRendering, imEndList, elementHasMouseClick, initializeImEvents, initializeDomRootAnimiationLoop } from "src/utils/im-dom-utils";
 
 function newButton() {
     return document.createElement("button");
@@ -23,29 +23,28 @@ function appState() {
 }
 
 function App() {
-    imRerenderable((rerender) => {
-        const state = imState(appState);
+    const state = imState(appState);
 
-        div(); {
-            text("Count: " + state.count);
-        } end();
+    imBeginDiv(); {
+        setInnerText("Count: " + state.count);
+    } imEnd();
 
-        div(); {
-            el(newButton); {
-                text("Increment");
-                imOn("click", () => {
-                    state.count++;
-                    rerender();
-                });
-            } end();
-        } end();
+    imBeginDiv(); {
+        imBeginEl(newButton); {
+            setInnerText("Increment");
+            if (elementHasMouseClick()) {
+                state.count++;
+            }
+        } imEnd();
+    } imEnd();
 
-        imIf(state.count > 10, () => {
-            div(); {
-                text("Count is super high?!? aint no way bruh? ");
-            } end();
-        });
-    });
+    imBeginList();
+    if (nextListRoot() && state.count > 10) {
+        imBeginDiv(); {
+            setInnerText("Count is super high?!? aint no way bruh? ");
+        } imEnd();
+    }
+    imEndList();
 }
 
 function rerenderApp() { 
@@ -54,7 +53,8 @@ function rerenderApp() {
 }
 
 // Kick-start the program by rendering it once.
-rerenderApp();
+initializeImEvents();
+initializeDomRootAnimiationLoop(rerenderApp);
 
 ```
 

@@ -1,5 +1,4 @@
-import { rerenderFn } from "./im-dom";
-import { span, getCurrentNumAnimations, newComponent, newInsertable, RenderGroup, div, el, contentsDiv, appendChild } from "./utils/dom-utils";
+import { getCurrentNumAnimations, newComponent, newInsertable, RenderGroup, div, el, contentsDiv, appendChild } from "./utils/dom-utils";
 
 function Button(rg: RenderGroup<{
     buttonText: string;

@@ -1,18 +1,29 @@
 import {
-    getCurrentNumAnimations,
-    imOn,
-    div, el, imState, imRerenderable, realtime, imTryCatch, imIf, imElse, imElseIf, newUiRoot,
-    text,
-    startRendering,
-    init,
-    end,
+    imBeginDiv, 
+    imBeginEl, 
+    imState, 
+    imBeginList, 
+    nextListRoot, 
+    newUiRoot,
+    imInit,
+    imEnd,
+    setInnerText,
     setAttributes,
-    attr,
-    imList,
-    nextRoot,
-    style,
-    getCurrentRootInternal,
+    setAttr,
+    setStyle,
+    imEndList,
+    elementHasMouseClick,
+    elementHasMouseHover,
+    getMouse,
+    deltaTimeSeconds,
+    imRef,
+    abortListAndRewindUiStack,
+    initializeDomRootAnimiationLoop,
+    getCurrentRoot,
+    imBeginMemo,
+    imEndMemo,
 } from "src/utils/im-dom-utils";
+
 
 function newInput() {
     return document.createElement("input");
@@ -29,47 +40,46 @@ function newLabel() {
 function Button(buttonText: string, onClick: () => void) {
     let button;
 
-    div(); {
-        button = el(newButton); {
-            text(buttonText);
-            imOn("click", onClick);
+    imBeginDiv(); {
+        button = imBeginEl(newButton); {
+            setInnerText(buttonText);
+
+            if (elementHasMouseClick()) {
+                onClick();
+            }
         };
-        end();
+        imEnd();
     }
-    end();
+    imEnd();
 
     return button;
 }
 
 function Slider(labelText: string, onChange: (val: number) => void) {
-    const root = div(); {
-        el(newLabel); {
-            init() && setAttributes({
-                for: labelText
-            })
-
-            attr("for", labelText);
-
-            text(labelText);
+    const root = imBeginDiv(); {
+        imBeginEl(newLabel); {
+            setAttr("for", labelText);
+            setInnerText(labelText);
         };
-        end();
-
-        const input = el<HTMLInputElement>(newInput); {
-            init() && setAttributes({
-                style: "width: 1000px",
+        imEnd();
+        const input = imBeginEl<HTMLInputElement>(newInput); {
+            imInit() && setAttributes({
                 type: "range",
                 min: "1", max: "300", step: "1",
             });
 
-            attr("name", labelText)
-            imOn("input", () => {
-                onChange(input.root.valueAsNumber);
-            });
-        }
-        end();
-    }
-    end();
+            setAttr("name", labelText)
 
+            if (elementHasMouseHover()) {
+                const mouse = getMouse();
+                if (mouse.leftMouseButton) {
+                    onChange(input.root.valueAsNumber);
+                }
+            }
+        }
+        imEnd();
+    }
+    imEnd();
     return root;
 }
 
@@ -78,42 +88,35 @@ function newWallClockState() {
 }
 
 function WallClock() {
-    realtime((dt) => {
-        const value = imState(newWallClockState);
+    const dt = deltaTimeSeconds();
+    const value = imState(newWallClockState);
 
-        value.val += (-0.5 + Math.random()) * 0.02;
-        if (value.val > 1) value.val = 1;
-        if (value.val < -1) value.val = -1;
+    value.val += (-0.5 + Math.random()) * 0.02;
+    if (value.val > 1) value.val = 1;
+    if (value.val < -1) value.val = -1;
 
-        div(); {
-            div(); {
-                const r = getCurrentRootInternal();
-                text("Removed: " + r.removed);
-            }
-            end();
-        }
-        end();
-        div(); {
-            text("brownian motion: " + value.val + "");
-        }
-        end();
-        div(); {
-            text("FPS: " + (1 / dt).toPrecision(2) + "");
-        }
-        end();
-        imList();
-        let n = value.val < 0 ? 1 : 2;
-        for (let i = 0; i < n; i++) {
-            nextRoot(); {
-                div();  {
-                    text(new Date().toISOString());
-                }
-                end();
-            }
-            end();
-        }
-        end();
-    });
+    imBeginDiv(); {
+        imBeginDiv(); {
+            const r = getCurrentRoot();
+            setInnerText("Removed: " + r.removed);
+        } imEnd();
+    } imEnd();
+    imBeginDiv(); {
+        setInnerText("brownian motion: " + value.val + "");
+    } imEnd();
+    imBeginDiv(); {
+        setInnerText("FPS: " + (1 / dt).toPrecision(2) + "");
+    } imEnd();
+    imBeginList();
+    let n = value.val < 0 ? 1 : 2;
+    for (let i = 0; i < n; i++) {
+        nextListRoot(); 
+
+        imBeginDiv();  {
+            setInnerText(new Date().toISOString());
+        } imEnd();
+    }
+    imEndList();
 }
 
 function resize(values: number[][], gridRows: number, gridCols: number) {
@@ -179,235 +182,219 @@ function newGridState() {
 }
 
 function App() {
-    imRerenderable((rerender) => {
-        const s = imState(newAppState);
-        s.rerender = rerender;
+    const errRef = imRef<any>();
 
-        imTryCatch({
-            tryFn: () => {
-                div(); {
-                    Button("Click me!", () => {
-                        alert("noo");
-                    });
-                    div(); {
-                        text("Hello world! ");
-                    }
-                    end();
-                    div(); {
-                        text("Lets goo");
-                    }
-                    end();
-                    div(); {
-                        text("Count: " + s.count);
-                    }
-                    end();
-                    div(); {
-                        text("Period: " + s.period);
-                    }
-                    end();
-                    realtime(() => {
-                        div(); {
-                            text("Realtime animations in progress: " + getCurrentNumAnimations())
-                        }
-                        end();
-                    });
+    const s = imState(newAppState);
 
-                    // sheesh. cant win with these people...
-                    imIf(s.count > 1000, () => {
-                        div(); {
-                            text("The count is too damn high!!");
-                        }
-                        end();
-                    });
-                    imElseIf(s.count < 1000, () => {
-                        div(); {
-                            text("The count is too damn low !!");
-                        }
-                        end();
-                    });
-                    imElse(() => {
-                        div(); {
-                            text("The count is too perfect!!");
-                        }
-                        end();
-                    });
-
-                    // again, with the list
-                    imList(); {
-                        if (s.count > 1000) {
-                            nextRoot(1); {
-                                div(); {
-                                    text("The count is too damn high!!");
-                                }
-                                end();
-                            } end();
-                        } else if (s.count === 1001) {
-                            nextRoot(2); {
-                                div(); {
-                                    text("Noo how");
-                                }
-                                end();
-                            }
-                            end();
-                        } else if (s.count < 1000) {
-                            nextRoot(3); {
-                                div(); {
-                                    text("The count is too damn low !!");
-                                }
-                                end();
-                            }
-                            end();
-                        } else {
-                            nextRoot(4); {
-                                div(); {
-                                    text("The count is too perfect!!");
-                                }
-                                end();
-                            }
-                            end();
-                        }
-                    } end();
-
-
-                    div(); {
-                        init() && setAttributes({
-                            style: "height: 5px; background-color: black"
-                        });
-                    }
-                    end();
-
-
-                    div(); {
-                        init() && setAttributes({
-                            style: "padding: 10px; border: 1px solid black; display: inline-block",
-                        });
-
-                        if (s.count < 500) {
-                            throw new Error("The count was way too low my dude");
-                        }
-
-                        imList(); {
-                            if (s.count < 2000) {
-                                nextRoot(1); {
-                                    WallClock();
-                                } end();
-                            }
-                        } end();
-                    }
-                    end();
-
+    const l = imBeginList();
+    try {
+        if (nextListRoot() && !errRef.val) {
+            imBeginDiv(); {
+                Button("Click me!", () => {
+                    alert("noo");
+                });
+                imBeginDiv(); {
+                    setInnerText("Hello world! ");
                 }
-                end();
+                imEnd();
+                imBeginDiv(); {
+                    setInnerText("Lets goo");
+                }
+                imEnd();
+                imBeginDiv(); {
+                    setInnerText("Count: " + s.count);
+                }
+                imEnd();
+                imBeginDiv(); {
+                    setInnerText("Period: " + s.period);
+                }
+                imEnd();
 
-                const gridState = imState(newGridState);
-                imIf(s.grid, () => {
-                    realtime((dt) => {
-                        const { values } = gridState;
+                // sheesh. cant win with these people...
+                imBeginList();
+                if (nextListRoot() && s.count > 1000) {
+                    imBeginDiv(); {
+                        setInnerText("The count is too damn high!!");
+                    } imEnd();
+                } else if (nextListRoot() && s.count < 1000) {
+                    imBeginDiv(); {
+                        setInnerText("The count is too damn low !!");
+                    } imEnd();
+                } else {
+                    nextListRoot();
+                    imBeginDiv(); {
+                        setInnerText("The count is too perfect!!");
+                    } imEnd();
+                }
+                imEndList();
 
-                        imList();
-                        for (let i = 0; i < values.length; i++) {
-                            nextRoot(); {
-                                div(); {
-                                    init() && setAttributes({
-                                        style: "display: flex;"
-                                    });
+                // again, with the list
+                imBeginList();
+                if (s.count > 1000) {
+                    nextListRoot(1); 
 
-                                    imList();
-                                    for (let j = 0; j < values[i].length; j++) {
-                                        nextRoot(); {
-                                            div(); {
-                                                if (init()) {
-                                                    setAttributes({
-                                                        style: "display: inline-block; width: 5px; height: 5px"
-                                                    });
+                    imBeginDiv(); {
+                        setInnerText("The count is too damn high!!");
+                    } imEnd();
+                } else if (s.count === 1001) {
+                    nextListRoot(2); 
 
-                                                    imOn("mousemove", () => {
-                                                        values[i][j] = 1;
-                                                        // rerender();
-                                                    });
-                                                }
+                    imBeginDiv(); {
+                        setInnerText("Noo how");
+                    } imEnd();
+                } else if (s.count < 1000) {
+                    nextListRoot(3); 
 
-                                                // NOTE: usually you would do this with a CSS transition if you cared about performance, but
-                                                // I'm just trying out some random stuff.
-                                                let val = values[i][j];
-                                                if (val > 0) {
-                                                    val -= dt;
-                                                    if (val < 0) {
-                                                        val = 0;
-                                                    }
-                                                    values[i][j] = val;
-                                                    style("backgroundColor", `rgba(0, 0, 0, ${val})`);
-                                                }
-                                            }
-                                            end();
-                                        }
-                                        end();
-                                    }
-                                    end();
-                                }
-                                end();
-                            }
-                            end();
-                        }
-                        end();
+                    imBeginDiv(); {
+                        setInnerText("The count is too damn low !!");
+                    } imEnd();
+                } else {
+                    nextListRoot(4); 
+
+                    imBeginDiv(); {
+                        setInnerText("The count is too perfect!!");
+                    } imEnd();
+                }
+                imEndList();
+
+
+                imBeginDiv(); {
+                    imInit() && setAttributes({
+                        style: "height: 5px; background-color: black"
                     });
+                }
+                imEnd();
+
+
+                imBeginDiv(); {
+                    imInit() && setAttributes({
+                        style: "padding: 10px; border: 1px solid black; display: inline-block",
+                    });
+
+                    if (s.count < 500) {
+                        throw new Error("The count was way too low my dude");
+                    }
+
+                    imBeginList();
+                    if (nextListRoot() && s.count < 2000) {
+                        WallClock();
+                    }
+                    imEndList();
+                }
+                imEnd();
+
+            }
+            imEnd();
+
+            const gridState = imState(newGridState);
+            imBeginList();
+            if (nextListRoot() && s.grid) {
+                const dt = deltaTimeSeconds();
+                const { values } = gridState;
+
+                imBeginList();
+                for (let i = 0; i < values.length; i++) {
+                    nextListRoot();
+
+                    imBeginDiv(); {
+                        imInit() && setAttributes({
+                            style: "display: flex;"
+                        });
+
+                        imBeginList();
+                        for (let j = 0; j < values[i].length; j++) {
+                            nextListRoot(); 
+                            imBeginDiv(); {
+                                if (imInit()) {
+                                    setAttributes({
+                                        style: "display: inline-block; width: 5px; height: 5px"
+                                    });
+                                }
+
+                                if (elementHasMouseHover()) {
+                                    const mouse = getMouse();
+                                    if (mouse.leftMouseButton) {
+                                        values[i][j] = 1;
+                                    }
+                                }
+
+                                // NOTE: usually you would do this with a CSS transition if you cared about performance, but
+                                // I'm just trying out some random stuff.
+                                let val = values[i][j];
+                                if (val > 0) {
+                                    val -= dt;
+                                    if (val < 0) {
+                                        val = 0;
+                                    }
+                                    values[i][j] = val;
+                                }
+
+                                const valRounded = Math.round(val * 255) / 255;
+                                if (imBeginMemo().val(valRounded).changed()) {
+                                    setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
+                                } imEndMemo();
+                            } imEnd();
+                        }
+                        imEndList();
+                    } imEnd();
+                }
+                imEndList();
+            } 
+            imEndList();
+
+            imBeginDiv(); {
+                imInit() && setAttributes({
+                    style: `position: fixed; bottom: 10px; left: 10px`
                 });
 
-                div(); {
-                    init() && setAttributes({
-                        style: `position: fixed; bottom: 10px; left: 10px`
-                    });
-
-                    Slider("period", s.setPeriod);
-                    Slider("increment", s.setIncrement);
-                    Button("Toggle grid", s.toggleGrid);
-                    Button("Increment count", s.incrementCount);
-                    Button("Refresh", rerender);
-                    Button("Decrement count", s.decrementCount);
-                }
-                end();
-
-            },
-            catchFn: (error, recover) => {
-                console.error(error);
-
-                div(); {
-                    init() && setAttributes({
-                        style: `display: absolute;top:0;bottom:0;left:0;right:0;`
-                    });
-
-                    div(); {
-                        init() && setAttributes({
-                            style: `display: flex; flex-direction: column; align-items: center; justify-content: center;`
-                        });
-
-                        div(); {
-                            text("An error occured");
-                        }
-                        end();
-                        div(); {
-                            text("Click below to retry.")
-                        }
-                        end();
-
-                        Button("Retry", () => {
-                            s.count = 1000;
-
-                            recover();
-                        });
-                    }
-                    end();
-                }
-                end();
+                Slider("period", s.setPeriod);
+                Slider("increment", s.setIncrement);
+                Button("Toggle grid", s.toggleGrid);
+                Button("Increment count", s.incrementCount);
+                Button("Decrement count", s.decrementCount);
             }
-        });
-    });
+            imEnd();
+        } else {
+            nextListRoot();
+
+            imBeginDiv(); {
+                imInit() && setAttributes({
+                    style: `display: absolute;top:0;bottom:0;left:0;right:0;`
+                });
+
+                imBeginDiv(); {
+                    imInit() && setAttributes({
+                        style: `display: flex; flex-direction: column; align-items: center; justify-content: center;`
+                    });
+
+                    imBeginDiv(); {
+                        setInnerText("An error occured: " + errRef.val);
+                    }
+                    imEnd();
+                    imBeginDiv(); {
+                        setInnerText("Click below to retry.")
+                    }
+                    imEnd();
+
+                    Button("Retry", () => {
+                        s.count = 1000;
+                        errRef.val = null;
+                    });
+                } imEnd();
+            } imEnd();
+        }
+    } catch(err) {
+        abortListAndRewindUiStack(l);
+        console.error(err);
+        errRef.val = err;
+    }
+    imEndList();
 }
 
 const appRoot = newUiRoot(() => document.body);
+
 function rerenderApp() {
-    startRendering(appRoot);
     App();
 }
 
-rerenderApp();
+initializeDomRootAnimiationLoop(rerenderApp, appRoot);
