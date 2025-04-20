@@ -329,57 +329,6 @@ export function getElementExtentNormalized(
     }
 }
 
-
-///////// 
-// Immediate-mode array datastructure, for use with the immediate mode renderer
-
-/**
- * An immediate-mode array datastructure is an array 
- * that starts off being variable length, and then locks
- * it's own size at some point during a 'frame boundary'.
- *
- * This allows subsequent 'rerenders' to assume that the exact same things
- * are being rerendered in the same position. This sounded similar to 
- * 'hooks' from React, so I may have accidentally called them 'hooks' 
- * in some places in this codebase, when I meant to say 'immediate mode state'. 
- *
- * Unlike React, every DOM node is also rendered as immediate-mode state.
- * There is also one key difference - immediate mode arrays support not being rendered to.
- * This means that if you decide to render nothing at all to an immediate mode array, it will not complain
- * about you not rendering enough things. 
- *
- * The class {@link UIRoot} actually checks for this case, and detatches any DOM elements it rendered in 
- * the previous render pass. 
- */
-type ImmediateModeArray<T> = {
-    items: T[];
-    idx: number;
-    init: number;
-};
-
-function newImArray<T>(): ImmediateModeArray<T> {
-    return {
-        items: [],
-        idx: -1,
-        init: 0,
-    };
-}
-
-function imGetCurrent<T>(arr: ImmediateModeArray<T>): T | undefined {
-    if (arr.idx >= arr.items.length) {
-        return undefined;
-    }
-    return arr.items[arr.idx];
-}
-
-function imReset(arr: ImmediateModeArray<unknown>) {
-    // Once an immediate mode array has been finalized, every subsequent render must create the same number of things.
-    // In this case, you've rendered too few things.
-    assert(arr.idx === -1 || arr.idx === arr.items.length - 1);
-
-    arr.idx = -1;
-}
-
 ///////// 
 // Immediate-mode dom renderer. I've replaced the old render-groups approach with this thing. 
 // It solves a lot of issues I've had with the old renderer, at the cost of being a bit more complicated,
@@ -505,200 +454,215 @@ export type RerenderPoint =  {
  *
  * See the docs for {@link imBeginList} for more info.
  */
-export class UIRoot<E extends ValidElement = ValidElement> {
+export type UIRoot<E extends ValidElement = ValidElement> = {
     readonly root: E;
     readonly domAppender: DomAppender<E>;
     // If there was no supplier, then this root is attached to the same DOM element as another UI root that does have a supplier.
     readonly elementSupplier: (() => ValidElement) | null;
 
-    readonly destructors: (() => void)[] = [];
+    readonly destructors: (() => void)[];
 
-    readonly items = newImArray<UIRootItem>();
-    lockImArray = false;
-    
-    openListRenderers = 0;
-    hasRealChildren = false;
-    manuallyHidden = false;
-    ifStatementOpen = false;
+    readonly items: UIRootItem[];
+    itemsIdx: number;
+    openListRenderers: number;
+    hasRealChildren: boolean;
+    ifStatementOpen: boolean;
 
     // Probably not needed, now that we're just rerendering the app in an animation frame.
-    removed = true;
-    destroyed = false;
+    removed: boolean;
+    destroyed: boolean;
+    began: boolean;
 
-    began = false;
+    lastText: string;
+};
 
-    // Users should call `newUiRoot` instead.
-    constructor(domAppender: DomAppender<E>, elementFactory: (() => ValidElement) | null) {
-        this.root = domAppender.root;
-        this.domAppender = domAppender;
-        this.elementSupplier = elementFactory;
+export function newUiRoot<E extends ValidElement>(supplier: (() => E) | null, domAppender: DomAppender<E> | null = null): UIRoot<E> {
+    let root: E | undefined;
+    if (!domAppender) {
+        assert(supplier);
+        root = supplier();
+        domAppender = { root, idx: -1, domElements: []  };
+    } else {
+        assert(domAppender);
+        root = domAppender.root;
     }
 
-    /**
-     * NOTE: if the component errors out before __end is called,
-     * this won't be updated to false. Hence, don't use this for real idempotency, use an imRef 
-     * that you check for null and set just once manually.
-     */
-    isInInitPhase = true;
+    return {
+        root,
+        domAppender,
+        // If there was no supplier, then this root is attached to the same DOM element as another UI root that does have a supplier.
+        elementSupplier: supplier, 
+        destructors: [],
+        items: [],
+        itemsIdx: -1,
+        openListRenderers: 0,
+        hasRealChildren: false,
+        ifStatementOpen: false,
+        removed: true,
+        destroyed: false,
+        began: false,
 
-    // TODO: think of how we can remove this, from user code at the very least.
-    __begin() {
-        resetDomAppender(this.domAppender);
-
-        imReset(this.items);
-
-        pushRoot(this);
-
-        // NOTE: avoid any more asertions here - the component may error out, and
-        // __end may not get called. No I'm not going to catch it with an exception stfu. We livin on the edge, bois.
-
-        this.openListRenderers = 0;
-
-        this.ifStatementOpen = false;
-
-        this.removed = false;
-        // we may be recovering from an error, so I'm not asserting !this.began here.
-        this.began = true;
-    }
-
-    // Only lock the size if we reach the end without the component throwing errors. 
-    __end(detatchElementsWhenNothingRendered = true) {
-        assert(this.began);
-        this.began = false;
-
-        popRoot();
-
-        this.isInInitPhase = false;
-
-        this.items.init = 1;
-
-        // DEV: If this is negative, I fkd up (I decremented this thing too many times) 
-        // User: If this is positive, u fked up (You forgot to finalize an open list)
-        assert(this.openListRenderers === 0);
-
-        if (detatchElementsWhenNothingRendered) {
-            if (this.items.idx === -1) {
-                // we rendered nothing to this root, so we should just remove it.
-                // however, we may render to it again on a subsequent render.
-                this.__removeAllDomElements(false);
-            }
-        }
-    }
-
-    setStyle<K extends (keyof E["style"])>(key: K, value: string) {
-        this.assertNotDerived();
-
-        // @ts-expect-error it sure can
-        this.root.style[key] = value;
-        return this;
-    }
-    readonly s = this.setStyle;
-
-    // NOTE: the effect of this method will persist accross renders
-    setClass(val: string, enabled: boolean | number = true) {
-        this.assertNotDerived();
-
-        const has = this.root.classList.contains(val);
-        if (has === !!enabled) {
-            return;
-        }
-
-        if (enabled) {
-            this.root.classList.add(val);
-        } else {
-            this.root.classList.remove(val);
-        }
-        return this;
-    }
-    readonly c = this.setClass;
-
-    lastText = "";
-    text(value: string) { 
-        // don't overwrite the real children!
-        assert(!this.hasRealChildren);
-
-        this.assertNotDerived();
-
-        if (this.lastText !== value) {
-            this.lastText = value;
-
-            if (this.root.childNodes.length === 0) {
-                this.root.appendChild(document.createTextNode(value));
-            } else {
-                const textNode = this.root.childNodes[0];
-                textNode.nodeValue = value;
-            }
-        }
-    }
-
-    setAttribute(attr: string, val: string | null) {
-        this.assertNotDerived();
-        return setAttribute(this.root, attr, val);
-    }
-    readonly a = this.setAttribute;
-
-    isDerived() {
-        return this.elementSupplier === null;
-    }
-
-    assertNotDerived() {
-        // When elementSupplier is null, this is because the root is not the 'owner' of a particular DOM element - 
-        // rather, we got it from a ListRenderer somehow - setting attributes on these React.fragment type roots is always a mistake
-        assert(!this.isDerived());
-    }
-
-    __onRemove(destroy: boolean) {
-        this.removed = true;
-        for (let i = 0; i < this.items.items.length; i++) {
-            const item = this.items.items[i];
-            if (item.t === ITEM_UI_ROOT) {
-                item.v.__onRemove(destroy);
-            } else if (item.t === ITEM_LIST) {
-                item.v.__onRemove(destroy);
-            }
-        }
-
-        if (destroy) {
-            // Don't call this twice.
-            assert(!this.destroyed);
-
-            this.destroyed = true;
-            for (const d of this.destructors) {
-                try {
-                    d();
-                } catch (e) {
-                    console.log("A destructor threw an exception: ", e);
-                }
-            }
-        }
-    }
-
-    // NOTE: If this is being called before we've rendered any components here, it should be ok.
-    // if it's being called during a render, then that is typically an incorrect usage - the domAppender's index may or may not be incorrect now, because
-    // we will have removed HTML elements out from underneath it. You'll need to ensure that this isn't happening in your use case.
-    __removeAllDomElements(destroy: boolean) {
-        for (let i = 0; i < this.items.items.length; i++) {
-            const item = this.items.items[i];
-            if (item.t === ITEM_UI_ROOT) {
-                item.v.domAppender.root.remove();
-                item.v.__onRemove(destroy);
-            } else if (item.t === ITEM_LIST) {
-                // needs to be fully recursive. because even though our UI tree is like
-                //
-                // -list
-                //   -list
-                //     -list
-                // 
-                // They're still all rendering to the same DOM root!!!
-                item.v.__removeAllDomElementsFromList(destroy);
-            }
-        }
-    }
-
-    addDestructor(destructor: () => void) {
-        this.destructors.push(destructor);
+        lastText: "",
     }
 }
+
+let appRoot: UIRoot = newUiRoot(() => document.body);
+const currentStack: (UIRoot | ListRenderer)[] = [];
+
+// Only one of these is defined at a time.
+let currentRoot: UIRoot | undefined;
+let currentListRenderer: ListRenderer | undefined;
+
+let currentMemo: Memoizer | undefined;
+let currentMemoizerStack: Memoizer[] = [];
+
+
+// TODO: think of how we can remove this, from user code at the very least.
+function __beginUiRoot(r: UIRoot) {
+    resetDomAppender(r.domAppender);
+    r.itemsIdx = -1;
+    pushRoot(r);
+
+    // NOTE: avoid any more asertions here - the component may error out, and
+    // __end may not get called. No I'm not going to catch it with an exception stfu. We livin on the edge, bois.
+
+    r.openListRenderers = 0;
+    r.ifStatementOpen = false;
+    r.removed = false;
+
+    // we may be recovering from an error, so I'm not asserting !r.began here.
+    r.began = true;
+}
+
+function isDerived(r: UIRoot) {
+    return r.elementSupplier === null;
+}
+
+function assertNotDerived(r: UIRoot) {
+    // When elementSupplier is null, this is because the root is not the 'owner' of a particular DOM element - 
+    // rather, we got it from a ListRenderer somehow - setting attributes on these React.fragment type roots is always a mistake
+    assert(!isDerived(r));
+}
+
+
+// Only lock the size if we reach the end without the component throwing errors. 
+function __endUiRoot(r: UIRoot, detatchElementsWhenNothingRendered = true) {
+    assert(r.began);
+    r.began = false;
+
+    popRoot();
+
+    // DEV: If this is negative, I fkd up (I decremented this thing too many times) 
+    // User: If this is positive, u fked up (You forgot to finalize an open list)
+    assert(r.openListRenderers === 0);
+
+    if (r.itemsIdx === -1) {
+        if (detatchElementsWhenNothingRendered) {
+            // we rendered nothing to r root, so we should just remove it.
+            // however, we may render to it again on a subsequent render.
+            __removeAllDomElementsFromUiRoot(r, false);
+        }
+    } else {
+        assert(r.itemsIdx === r.items.length - 1);
+    }
+}
+
+export function setClass(val: string, enabled: boolean | number = true) {
+    // NOTE: the effect of r method will persist accross renders
+    const r = getCurrentRoot();
+
+    const has = r.root.classList.contains(val);
+    if (has === !!enabled) {
+        return;
+    }
+
+    if (enabled) {
+        r.root.classList.add(val);
+    } else {
+        r.root.classList.remove(val);
+    }
+
+    return !!enabled;
+}
+
+export function setInnerText(text: string) {
+    const r = getCurrentRoot();
+
+    // don't overwrite the real children!
+    assert(!r.hasRealChildren);
+
+    assertNotDerived(r);
+
+    if (r.lastText !== text) {
+        r.lastText = text;
+
+        if (r.root.childNodes.length === 0) {
+            r.root.appendChild(document.createTextNode(text));
+        } else {
+            const textNode = r.root.childNodes[0];
+            textNode.nodeValue = text;
+        }
+    }
+}
+
+export function setAttr<T extends keyof Attrs>(k: T, v: string | null) {
+    const r = getCurrentRoot();
+    return setAttribute(r.root, k, v);
+}
+
+export function __onRemoveUiRoot(r: UIRoot, destroy: boolean) {
+    r.removed = true;
+    for (let i = 0; i < r.items.length; i++) {
+        const item = r.items[i];
+        if (item.t === ITEM_UI_ROOT) {
+            __onRemoveUiRoot(item.v, destroy);
+        } else if (item.t === ITEM_LIST) {
+            item.v.__onRemove(destroy);
+        }
+    }
+
+    if (destroy) {
+        // Don't call r twice.
+        assert(!r.destroyed);
+
+        r.destroyed = true;
+        for (const d of r.destructors) {
+            try {
+                d();
+            } catch (e) {
+                console.log("A destructor threw an exception: ", e);
+            }
+        }
+    }
+}
+
+
+// NOTE: If this is being called before we've rendered any components here, it should be ok.
+// if it's being called during a render, then that is typically an incorrect usage - the domAppender's index may or may not be incorrect now, because
+// we will have removed HTML elements out from underneath it. You'll need to ensure that this isn't happening in your use case.
+export function __removeAllDomElementsFromUiRoot(r: UIRoot, destroy: boolean) {
+    for (let i = 0; i < r.items.length; i++) {
+        const item = r.items[i];
+        if (item.t === ITEM_UI_ROOT) {
+            item.v.domAppender.root.remove();
+            __onRemoveUiRoot(item.v, destroy);
+        } else if (item.t === ITEM_LIST) {
+            // needs to be fully recursive. because even though our UI tree is like
+            //
+            // -list
+            //   -list
+            //     -list
+            // 
+            // They're still all rendering to the same DOM root!!!
+            item.v.__removeAllDomElementsFromList(destroy);
+        }
+    }
+}
+
+export function addDestructor(r: UIRoot, destructor: () => void) {
+    r.destructors.push(destructor);
+}
+
 
 // TODO: keyed list renderer. It will be super useful, for type narrowing with switch statements.
 
@@ -730,7 +694,7 @@ export class ListRenderer {
         let result = this.keys.get(key);
         if (!result) {
             result = { 
-                root: new UIRoot(this.uiRoot.domAppender, null),
+                root: newUiRoot(null, this.uiRoot.domAppender),
                 rendered: false
             };
             this.keys.set(key, result);
@@ -763,7 +727,7 @@ export class ListRenderer {
             if (idx < this.builders.length) {
                 result = this.builders[idx];
             } else {
-                result = new UIRoot(this.uiRoot.domAppender, null);
+                result = newUiRoot(null, this.uiRoot.domAppender);
                 this.builders.push(result);
             }
 
@@ -772,7 +736,7 @@ export class ListRenderer {
 
         // Append new list elements to where we're currently appending
         const currentDomRootIdx = result.domAppender.idx;
-        result.__begin();
+        __beginUiRoot(result);
         result.domAppender.idx = currentDomRootIdx;
 
         this.current = result;
@@ -789,12 +753,12 @@ export class ListRenderer {
 
         // remove all the UI components that may have been added by other builders in the previous render.
         for (let i = this.builderIdx; i < this.builders.length; i++) {
-            this.builders[i].__removeAllDomElements(true);
+            __removeAllDomElementsFromUiRoot(this.builders[i], true);
         }
         this.builders.length = this.builderIdx;
         for (const [k, v] of this.keys) {
             if (!v.rendered) {
-                v.root.__removeAllDomElements(true);
+                __removeAllDomElementsFromUiRoot(v.root, true);
                 this.keys.delete(k);
             }
         }
@@ -802,30 +766,25 @@ export class ListRenderer {
 
     __onRemove(destroy: boolean) {
         for (let i = 0; i < this.builders.length; i++) {
-            this.builders[i].__onRemove(destroy);
+            __onRemoveUiRoot(this.builders[i], destroy);
         }
         for (const v of this.keys.values()) {
-            v.root.__onRemove(destroy);
+            __onRemoveUiRoot(v.root, destroy);
         }
     }
 
     // kinda have to assume that it's valid to remove these elements.
     __removeAllDomElementsFromList(destroy: boolean) {
         for (let i = 0; i < this.builders.length; i++) {
-            this.builders[i].__removeAllDomElements(destroy);
+            __removeAllDomElementsFromUiRoot(this.builders[i], destroy);
         }
         for (const v of this.keys.values()) {
-            v.root.__removeAllDomElements(destroy);
+            __removeAllDomElementsFromUiRoot(v.root, destroy);
         }
     }
 
 }
 
-export function newUiRoot<E extends ValidElement>(supplier: () => E): UIRoot<E> {
-    const root = supplier();
-    const result = new UIRoot<E>({ root, idx: -1, domElements: []  }, supplier);
-    return result;
-}
 
 export type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot<T>) => void;
 export type RenderFnArgs<A extends unknown[], T extends ValidElement = ValidElement> = (r: UIRoot<T>, ...args: A) => void;
@@ -868,9 +827,9 @@ export function imBeginList(): ListRenderer {
 
     let result: ListRenderer | undefined; 
     const items = r.items;
-    const idx = ++items.idx;
-    if (idx < items.items.length) {
-        const box = items.items[idx];
+    const idx = ++r.itemsIdx;
+    if (idx < items.length) {
+        const box = items[idx];
 
         // The same hooks must be called in the same order every time
         assert(box.t === ITEM_LIST);
@@ -879,7 +838,7 @@ export function imBeginList(): ListRenderer {
     } else {
         result = new ListRenderer(r);
         const box: ListRendererItem = { t: ITEM_LIST, v: result };
-        items.items.push(box);
+        items.push(box);
     }
 
     result.__begin();
@@ -921,9 +880,9 @@ function imStateInternal<T>(supplier: () => T, skipSupplierCheck: boolean): T {
 
     let result: T;
     const items = r.items;
-    const idx = ++items.idx;
-    if (idx < items.items.length) {
-        const box = items.items[idx];
+    const idx = ++r.itemsIdx;
+    if (idx < items.length) {
+        const box = items[idx];
         assert(box.t === ITEM_STATE);
 
         if (!skipSupplierCheck) {
@@ -942,7 +901,7 @@ function imStateInternal<T>(supplier: () => T, skipSupplierCheck: boolean): T {
         enableIm();
 
         const box: StateItem = { t: ITEM_STATE, v: result, supplier };
-        items.items.push(box);
+        items.push(box);
     }
 
     return result;
@@ -990,14 +949,6 @@ export function imComponent<T>(supplier: () => T): T {
 export function imStateInline<T>(supplier: () => T) : T {
     return imStateInternal(supplier, true);
 }
-
-let appRoot: UIRoot = newUiRoot(() => document.body);
-const currentStack: (UIRoot | ListRenderer)[] = [];
-
-// Only one of these is defined at a time.
-let currentRoot: UIRoot | undefined;
-let currentListRenderer: ListRenderer | undefined;
-
 
 /**
  * Allows you to get the current root without having a reference to it.
@@ -1108,7 +1059,7 @@ function startRendering(r: UIRoot = appRoot) {
     currentStack.length = 0;
     currentMemoizerStack.length = 0;
     enableIm();
-    r.__begin();
+    __beginUiRoot(r);
 }
 
 export function imBeginEl<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
@@ -1119,9 +1070,9 @@ export function imBeginEl<E extends ValidElement = ValidElement>(elementSupplier
 
     let result: UIChildRootItem<E> | undefined;
     let items = r.items;
-    const idx = ++items.idx;
-    if (idx < items.items.length) {
-        result = items.items[idx] as UIChildRootItem<E>;
+    const idx = ++r.itemsIdx;
+    if (idx < items.length) {
+        result = items[idx] as UIChildRootItem<E>;
 
         // The same hooks must be called in the same order every time.
         assert(result.t === ITEM_UI_ROOT);
@@ -1131,13 +1082,13 @@ export function imBeginEl<E extends ValidElement = ValidElement>(elementSupplier
     } else {
         const uiRoot = newUiRoot(elementSupplier);
         result = { t: ITEM_UI_ROOT, v: uiRoot };
-        items.items.push(result);
+        items.push(result);
     }
 
     r.hasRealChildren = true;
     appendToDomRoot(r.domAppender, result.v.domAppender.root);
 
-    result.v.__begin();
+    __beginUiRoot(result.v);
 
     return result.v as UIRoot<E>;
 } 
@@ -1146,11 +1097,11 @@ export function imBeginEl<E extends ValidElement = ValidElement>(elementSupplier
 export function imEnd(detatchElements = true) {
     const val = getCurrentRoot();
 
-    if (!val.isDerived()) {
+    if (!isDerived(val)) {
         deferClickEventToParentInternal(val);
     }
 
-    val.__end(detatchElements);
+    __endUiRoot(val, detatchElements);
 }
 
 export function imEndList(isConditional=false, detatchElements = true) {
@@ -1240,11 +1191,6 @@ export function imBeginDiv(): UIRoot<HTMLDivElement> {
     return imBeginEl<HTMLDivElement>(newDiv);
 }
 
-export function setInnerText(str: string) {
-    const r = getCurrentRoot();
-    r.text(str);
-}
-
 export function imBeginSpan(): UIRoot<HTMLSpanElement> {
     return imBeginEl<HTMLSpanElement>(newSpan);
 }
@@ -1260,7 +1206,7 @@ export function abortListAndRewindUiStack(l: ListRenderer) {
 
     const r = l.current;
     if (r) {
-        r.__removeAllDomElements(false);
+        __removeAllDomElementsFromUiRoot(r, false);
 
         // need to reset the dom root, since we've just removed elements underneath it
         resetDomAppender(r.domAppender);
@@ -1314,7 +1260,8 @@ export function imSetVal<T>(t: T): T {
 
     let prevDisabled = imDisabled;
     imDisabled = false;
-    let val = imGetCurrent(root.items);
+    assert(root.itemsIdx < root.items.length)
+    let val = root.items[root.itemsIdx];
     imDisabled = prevDisabled;
 
     assert(val?.t === ITEM_STATE);
@@ -1335,7 +1282,8 @@ export function enableIm() {
 
 class Memoizer {
     im: boolean;
-    items = newImArray<unknown>();
+    items: unknown[] = [];
+    itemsIdx: number = -1;
     __changed = false;
     __invoked = true;
 
@@ -1362,7 +1310,7 @@ class Memoizer {
         assert(this.__invoked);
 
 
-        imReset(this.items);
+        this.itemsIdx = -1;
         this.__changed = false
         this.__invoked = false;
     }
@@ -1376,15 +1324,15 @@ class Memoizer {
 
     val(val: unknown) {
         const items = this.items;
-        const idx = ++items.idx;
-        if (idx < items.items.length) {
-            const existing = items.items[idx]
+        const idx = ++this.itemsIdx;
+        if (idx < items.length) {
+            const existing = items[idx]
             if (existing !== val) {
                 this.__changed = true;
-                items.items[idx] = val;
+                items[idx] = val;
             }
         } else {
-            items.items.push(val);
+            items.push(val);
             this.__changed = true;
         }
 
@@ -1406,9 +1354,6 @@ class Memoizer {
     }
 }
 
-
-let currentMemo: Memoizer | undefined;
-let currentMemoizerStack: Memoizer[] = [];
 
 export function getCurrentMemoizer(): Memoizer {
     // You probably didn't call beginMemo().changed() yet, or you forgot to close out one of the other things
@@ -1486,7 +1431,7 @@ function newMemoizerImmediateMode() {
 
 function saveRenderPoint(dst: RerenderPoint, src: UIRoot) {
     const domIdx = src.domAppender.idx;
-    const idx = src.items.idx;
+    const idx = src.itemsIdx;
     dst.itemsIdx = idx;
     dst.domAppenderIdx = domIdx;
 }
@@ -1494,7 +1439,7 @@ function saveRenderPoint(dst: RerenderPoint, src: UIRoot) {
 function loadRenderPoint(src: RerenderPoint, dst: UIRoot) {
     const domIdx = src.domAppenderIdx;
     const idx = src.itemsIdx;
-    dst.items.idx = idx;
+    dst.itemsIdx = idx;
     dst.domAppender.idx = domIdx;
 }
 
@@ -1508,7 +1453,7 @@ export function imEndMemo() {
             // we would have actually rendered something this time.
             // because of list renderers, the dom index may be different every time, so we have to save it every time
             saveRenderPoint(val.resumePoint, root);
-        } else if (root.items.idx === -1) {
+        } else if (root.itemsIdx === -1) {
             // we rendered nothing. we'll need to fix the indices in the dom appender, and the immediate mode state array
             loadRenderPoint(val.resumePoint, root);
         }
@@ -1554,7 +1499,7 @@ export function imOn<K extends keyof HTMLElementEventMap>(type: K): HTMLElementE
             handler
         );
 
-        r.addDestructor(() => {
+        addDestructor(r, () => {
             r.root.removeEventListener(
                 type,
                 // @ts-expect-error this thing is fine, actually.
@@ -1625,28 +1570,21 @@ export function setAttributes(attrs: Attrs, r = getCurrentRoot()) {
 }
 
 export function addClasses(classes: string[]) {
-    const r = getCurrentRoot();
     for (let i = 0; i < classes.length; i++) {
-        r.c(classes[i]);
+        setClass(classes[i]);
     }
 }
 
-export function setAttr<T extends keyof Attrs>(k: T, v: string | null) {
-    const r = getCurrentRoot();
-    r.setAttribute(k, v);
-}
 
 export function setStyle<K extends (keyof ValidElement["style"])>(key: K, value: string) {
     const r = getCurrentRoot();
-    r.setStyle(key, value);
+
+    assertNotDerived(r);
+
+    // @ts-expect-error it sure can
+    r.root.style[key] = value;
 }
 
-export function setClass(val: string, enabled: boolean | number = true) {
-    // NOTE: the effect of this method will persist accross renders
-    const r = getCurrentRoot();
-    r.setClass(val, enabled);
-    return !!enabled;
-}
 
 ///////// 
 // Realtime proper immediate-mode events API, with events.
@@ -2047,7 +1985,7 @@ export function imPreventScrollEventPropagation() {
             }
         }
         r.root.addEventListener("wheel", handler);
-        r.addDestructor(() => {
+        addDestructor(r, () => {
             r.root.removeEventListener("wheel", handler);
         });
     }
@@ -2140,7 +2078,7 @@ function newImGetSizeState(): {
 
     self.observer.observe(r.root);
     numResizeObservers++;
-    r.addDestructor(() => {
+    addDestructor(r, () => {
         numResizeObservers--;
         self.observer.disconnect()
     });
