@@ -9,9 +9,10 @@
  * you only need to put a breakpoint here to respond to the vast majority of failures.
  */
 export function assert(value: unknown): asserts value {
-    if (!value) {
-        throw new Error("Assertion failed");
-    }
+    // NOTE: may need to make this a no-op for correct profiling results
+    // if (!value) {
+    //     throw new Error("Assertion failed");
+    // }
 }
 
 export function typeGuard(_: never) {

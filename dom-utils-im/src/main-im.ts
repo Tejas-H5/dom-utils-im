@@ -20,9 +20,15 @@ import {
     abortListAndRewindUiStack,
     initializeDomRootAnimiationLoop,
     getCurrentRoot,
-    imBeginMemo,
-    imEndMemo,
+    imMemo,
+    imBeginSpan,
+    imTextSpan,
+    cn,
+    imStateInline,
+    initializeDomUtils,
+    getNumElementsRendered,
 } from "src/utils/im-dom-utils";
+import { setAttrs } from "./utils/dom-utils";
 
 
 function newInput() {
@@ -98,7 +104,7 @@ function WallClock() {
     imBeginDiv(); {
         imBeginDiv(); {
             const r = getCurrentRoot();
-            setInnerText("Removed: " + r.removed);
+            setInnerText("Destroyed: " + r.destroyed);
         } imEnd();
     } imEnd();
     imBeginDiv(); {
@@ -181,6 +187,159 @@ function newGridState() {
     return { gridRows, gridCols, values };
 }
 
+
+
+type FpsCounterState = {
+    t: number;
+    t0: number;
+    frames: number;
+    frameTime: number;
+    screenHz: number;
+
+    timeSpentRendering: number;
+    timeSpentRenderingPerFrame: number;
+    renders: number;
+    renderHz: number;
+
+    // Try to infer the 'baseline' frequency, so we know when we're lagging.
+    baselineFrameMs: number;
+    baselineFrameMsFreq: number;
+    baselineLocked: boolean;
+    nextBaseline: number;
+    nextFreq: number;
+
+    framesMsRounded: number;
+    renderMsRounded: number;
+}
+
+function newFpsCounterState(): FpsCounterState {
+    return {
+        t: 0,
+        t0: 0,
+        frames: 0,
+        frameTime: 0,
+        screenHz: 0,
+
+        timeSpentRendering: 0,
+        timeSpentRenderingPerFrame: 0,
+        renders: 0,
+        renderHz: 0,
+
+        // Try to infer the 'baseline' frequency, so we know when we're lagging.
+        baselineFrameMs: 100,
+        baselineFrameMsFreq: 0,
+        baselineLocked: false,
+        nextBaseline: 100,
+        nextFreq: 0,
+
+        framesMsRounded: 0,
+        renderMsRounded: 0,
+    };
+}
+
+function startPerfTimer(fps: FpsCounterState) {
+    fps.t0 = performance.now();
+    const dt = deltaTimeSeconds();
+    fps.t += dt;
+    if (fps.t > 1) {
+        fps.frameTime = fps.t / fps.frames;
+        fps.screenHz = Math.round(fps.frames / fps.t);
+        fps.t = 0;
+        fps.frames = 1;
+
+        fps.timeSpentRenderingPerFrame = (fps.timeSpentRendering / 1000) / fps.renders;
+        fps.renderHz = Math.round(fps.renders / (fps.timeSpentRendering / 1000));
+        fps.timeSpentRendering = 0;
+        fps.renders = 1;
+    } else {
+        fps.frames++;
+    }
+
+    fps.framesMsRounded = Math.round(1000 * fps.frameTime);
+    fps.renderMsRounded = Math.round(1000 * fps.timeSpentRenderingPerFrame);
+
+    // Compute our baseline framerate based on the frames we see.
+    // Lock it down once we've seen the same framerate for long enough.
+    fps.baselineLocked = fps.baselineFrameMsFreq > 240
+    if (!fps.baselineLocked) {
+        if (fps.framesMsRounded === fps.nextBaseline) {
+            if (fps.nextFreq < Number.MAX_SAFE_INTEGER) {
+                fps.nextFreq++;
+            }
+        } else if (fps.framesMsRounded === fps.baselineFrameMs) {
+            if (fps.baselineFrameMsFreq < Number.MAX_SAFE_INTEGER) {
+                fps.baselineFrameMsFreq++;
+            }
+        } else {
+            fps.nextBaseline = fps.framesMsRounded;
+            fps.nextFreq = 1;
+        }
+
+        if (fps.nextFreq > fps.baselineFrameMsFreq) {
+            fps.baselineFrameMs = fps.nextBaseline;
+            fps.baselineFrameMsFreq = fps.nextFreq;
+            fps.nextBaseline = 100;
+            fps.nextFreq = 0;
+        }
+    }
+}
+
+function stopPerfTimer(fps: FpsCounterState) {
+    // render-start     -> Timer start
+    //      rendering code()
+    // render-end       -> timer stop
+    // --- wait for next animation frame ---
+    // this timer intentionally skips all of the time here.
+    // we want to know what our remaining performance budget is, basically
+    // ---
+    // repeat
+
+    fps.timeSpentRendering += (performance.now() - fps.t0);
+    fps.renders++;
+}
+
+function imPerfTimerOutput(fps: FpsCounterState) {
+    imBeginDiv(); {
+        if (imInit()) {
+            setStyle("position", "absolute");
+            setStyle("top", "5px");
+            setStyle("right", "5px");
+            setStyle("padding", "5px");
+            setStyle("zIndex", "1000000");
+            // YOU gotta set this.
+            // setStyle("backgroundColor", );
+            setStyle("borderRadius", "1000px");
+            setStyle("opacity", "0.5");
+            // setStyle("backgroundColor", cssVars.fg);
+            // setStyle("width", "20px");
+            // setStyle("height", "20px");
+            // setStyle("transformOrigin", "center");
+        }
+
+        // r.text(screenHz + "hz screen, " + renderHz + "hz code");
+
+        imTextSpan(fps.baselineLocked ? (fps.baselineFrameMs + "ms baseline, ") : "computing baseline...");
+
+        imTextSpan(fps.framesMsRounded + "ms frame, ");
+
+        imBeginSpan(); {
+            const fpsChanged = imMemo(fps.renderMsRounded);
+            if (fpsChanged) {
+                setStyle("color", fps.renderMsRounded / fps.baselineFrameMs > 0.5 ? "red" : "");
+            } 
+            setInnerText(fps.renderMsRounded + "ms render");
+        } imEnd();
+        // setStyle("transform", "rotate(" + angle + "deg)");
+
+        if (elementHasMouseClick()) {
+            fps.baselineFrameMsFreq = 0;
+        }
+
+        imTextSpan("Text span: " + getNumElementsRendered());
+
+    } imEnd();
+}
+
 function App() {
     const errRef = imRef<any>();
 
@@ -189,6 +348,11 @@ function App() {
     const l = imBeginList();
     try {
         if (nextListRoot() && !errRef.val) {
+
+            const fps = imState(newFpsCounterState);
+            startPerfTimer(fps);
+            imPerfTimerOutput(fps);
+
             imBeginDiv(); {
                 Button("Click me!", () => {
                     alert("noo");
@@ -228,42 +392,11 @@ function App() {
                 }
                 imEndList();
 
-                // again, with the list
-                imBeginList();
-                if (s.count > 1000) {
-                    nextListRoot(1); 
-
-                    imBeginDiv(); {
-                        setInnerText("The count is too damn high!!");
-                    } imEnd();
-                } else if (s.count === 1001) {
-                    nextListRoot(2); 
-
-                    imBeginDiv(); {
-                        setInnerText("Noo how");
-                    } imEnd();
-                } else if (s.count < 1000) {
-                    nextListRoot(3); 
-
-                    imBeginDiv(); {
-                        setInnerText("The count is too damn low !!");
-                    } imEnd();
-                } else {
-                    nextListRoot(4); 
-
-                    imBeginDiv(); {
-                        setInnerText("The count is too perfect!!");
-                    } imEnd();
-                }
-                imEndList();
-
-
                 imBeginDiv(); {
                     imInit() && setAttributes({
                         style: "height: 5px; background-color: black"
                     });
-                }
-                imEnd();
+                } imEnd();
 
 
                 imBeginDiv(); {
@@ -272,7 +405,7 @@ function App() {
                     });
 
                     if (s.count < 500) {
-                        throw new Error("The count was way too low my dude");
+                        // throw new Error("The count was way too low my dude");
                     }
 
                     imBeginList();
@@ -285,6 +418,43 @@ function App() {
 
             }
             imEnd();
+
+            imBeginDiv(); {
+                if (imInit()) {
+                    setAttributes({ class: [cn.row], style: "height: 4em" });
+                }
+
+                const n = 20;
+                const pingPong = imStateInline(() => {
+                    return { pos: 0, dir: 1 };
+                });
+                if (pingPong.pos === 0) {
+                    pingPong.dir = 1;
+                } else if (pingPong.pos === n) {
+                    pingPong.dir = -1;
+                }
+                if (pingPong.pos < n || pingPong.pos > 0) {
+                    pingPong.pos += pingPong.dir;
+                } 
+
+                imBeginList();
+                for (let i = 0; i <= n; i++) {
+                    nextListRoot();
+                    imBeginDiv(); {
+                        if (imInit()) {
+                            setStyle("flex", "1");
+                            setStyle("height", "100%");
+                        }
+
+                        const present = i === pingPong.pos;
+                        const changed = imMemo(present);
+                        if (changed) {
+                            setStyle("backgroundColor", present ? "#000" : "#FFF");
+                        }
+                    } imEnd();
+                }
+                imEndList();
+            } imEnd();
 
             const gridState = imState(newGridState);
             imBeginList();
@@ -330,13 +500,15 @@ function App() {
                                 }
 
                                 const valRounded = Math.round(val * 255) / 255;
-                                if (imBeginMemo().val(valRounded).changed()) {
+                                const styleChanged = imMemo(valRounded);
+                                if (styleChanged) {
                                     setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
-                                } imEndMemo();
+                                } 
                             } imEnd();
                         }
                         imEndList();
                     } imEnd();
+
                 }
                 imEndList();
             } 
@@ -354,6 +526,8 @@ function App() {
                 Button("Decrement count", s.decrementCount);
             }
             imEnd();
+
+            stopPerfTimer(fps);
         } else {
             nextListRoot();
 
@@ -397,4 +571,5 @@ function rerenderApp() {
     App();
 }
 
+initializeDomUtils();
 initializeDomRootAnimiationLoop(rerenderApp, appRoot);
