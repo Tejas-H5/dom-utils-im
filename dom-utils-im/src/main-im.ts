@@ -23,12 +23,10 @@ import {
     imMemo,
     imBeginSpan,
     imTextSpan,
-    cn,
     imStateInline,
-    initializeDomUtils,
     getNumElementsRendered,
 } from "src/utils/im-dom-utils";
-import { setAttrs } from "./utils/dom-utils";
+import { cn, initCnStyles } from "./utils/cn";
 
 
 function newInput() {
@@ -508,7 +506,6 @@ function App() {
                         }
                         imEndList();
                     } imEnd();
-
                 }
                 imEndList();
             } 
@@ -571,5 +568,5 @@ function rerenderApp() {
     App();
 }
 
-initializeDomUtils();
+initCnStyles();
 initializeDomRootAnimiationLoop(rerenderApp, appRoot);
