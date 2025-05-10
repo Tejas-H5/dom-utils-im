@@ -1,45 +1,34 @@
-import { setAttributes, getKeys, imBeginDiv, imBeginList, imEnd, imEndList, imInit, initializeDomRootAnimiationLoop, KeyboardState, nextListRoot, setInnerText, setStyle, imBeginSpan, getMouse } from "./utils/im-dom-utils";
+import { getKeyEvents as getKeyboardEvents, imBeginDiv, imBeginList, imEnd, imEndList, imInit, initializeDomRootAnimiationLoop, setInnerText, setStyle, imBeginSpan, getMouse, imTextSpan, setAttr, nextListRoot } from "./utils/im-dom-utils";
+
+const currentKeys = new Set<string>();
 
 function render() {
-    const keys = getKeys();
+    if (imInit()) {
+        setAttr("style", "font-size: 24px");
+    }
 
-    imInit() && setAttributes({
-        style: "font-size: 24px",
-    });
+    const { keyDown, keyUp, blur } = getKeyboardEvents();
+    if (keyDown) {
+        currentKeys.add(keyDown.key);
+    }
+    if (keyUp) {
+        currentKeys.delete(keyUp.key);
+    }
+    if (blur) {
+        currentKeys.clear();
+    }
 
     imBeginList();
-    for (const k in keys) {
+    for (const key of currentKeys) {
         nextListRoot();
-
-        imBeginDiv(); {
-            imBeginSpan(); {
-                setInnerText(k);
-            } imEnd();
-
-            imBeginSpan(); {
-                setInnerText(": ");
-            } imEnd();
-
-            imBeginList();
-            const arr = keys[k as keyof KeyboardState];
-            for (const key of arr) {
-                nextListRoot();
-
-                imBeginSpan(); {
-                    setInnerText(key + ", ");
-                } imEnd();
-            }
-            imEndList();
-        } imEnd();
+        imTextSpan(key + ", ")
     }
     imEndList();
 
     imBeginDiv(); {
         const SIZE = 50;
         if (imInit()) {
-            setAttributes({
-                style: `position: absolute; width: ${SIZE}px; height: ${SIZE}px; background-color: #000`
-            });
+            setAttr("style", `position: absolute; width: ${SIZE}px; height: ${SIZE}px; background-color: #000`);
         }
 
         const mouse = getMouse();

@@ -8,7 +8,6 @@ import {
     imInit,
     imEnd,
     setInnerText,
-    setAttributes,
     setAttr,
     setStyle,
     imEndList,
@@ -24,7 +23,8 @@ import {
     imBeginSpan,
     imTextSpan,
     imStateInline,
-    getNumElementsRendered,
+    getNumImStateEntriesRendered,
+    setClass,
 } from "src/utils/im-dom-utils";
 import { cn, initCnStyles } from "./utils/cn";
 
@@ -67,10 +67,12 @@ function Slider(labelText: string, onChange: (val: number) => void) {
         };
         imEnd();
         const input = imBeginEl<HTMLInputElement>(newInput); {
-            imInit() && setAttributes({
-                type: "range",
-                min: "1", max: "300", step: "1",
-            });
+            if (imInit()) {
+                setAttr("type", "range");
+                setAttr("min", "1");
+                setAttr("max", "300");
+                setAttr("step", "1");
+            }
 
             setAttr("name", labelText)
 
@@ -176,7 +178,7 @@ function newAppState() {
 }
 
 function newGridState() {
-    let gridRows = 100;
+    let gridRows = 200;
     let gridCols = 400;
     const values: number[][] = [];
 
@@ -239,19 +241,8 @@ function startPerfTimer(fps: FpsCounterState) {
     fps.t0 = performance.now();
     const dt = deltaTimeSeconds();
     fps.t += dt;
-    if (fps.t > 1) {
-        fps.frameTime = fps.t / fps.frames;
-        fps.screenHz = Math.round(fps.frames / fps.t);
-        fps.t = 0;
-        fps.frames = 1;
+    fps.frames++;
 
-        fps.timeSpentRenderingPerFrame = (fps.timeSpentRendering / 1000) / fps.renders;
-        fps.renderHz = Math.round(fps.renders / (fps.timeSpentRendering / 1000));
-        fps.timeSpentRendering = 0;
-        fps.renders = 1;
-    } else {
-        fps.frames++;
-    }
 
     fps.framesMsRounded = Math.round(1000 * fps.frameTime);
     fps.renderMsRounded = Math.round(1000 * fps.timeSpentRenderingPerFrame);
@@ -294,6 +285,18 @@ function stopPerfTimer(fps: FpsCounterState) {
 
     fps.timeSpentRendering += (performance.now() - fps.t0);
     fps.renders++;
+
+    if (fps.t > 1) {
+        fps.frameTime = fps.t / fps.frames;
+        fps.screenHz = Math.round(fps.frames / fps.t);
+        fps.t = 0;
+        fps.frames = 0;
+
+        fps.timeSpentRenderingPerFrame = (fps.timeSpentRendering / 1000) / fps.renders;
+        fps.renderHz = Math.round(fps.renders / (fps.timeSpentRendering / 1000));
+        fps.timeSpentRendering = 0;
+        fps.renders = 0;
+    } 
 }
 
 function imPerfTimerOutput(fps: FpsCounterState) {
@@ -333,7 +336,7 @@ function imPerfTimerOutput(fps: FpsCounterState) {
             fps.baselineFrameMsFreq = 0;
         }
 
-        imTextSpan("Text span: " + getNumElementsRendered());
+        imTextSpan("Text span: " + getNumImStateEntriesRendered());
 
     } imEnd();
 }
@@ -345,6 +348,7 @@ function App() {
 
     const l = imBeginList();
     try {
+
         if (nextListRoot() && !errRef.val) {
 
             const fps = imState(newFpsCounterState);
@@ -391,16 +395,16 @@ function App() {
                 imEndList();
 
                 imBeginDiv(); {
-                    imInit() && setAttributes({
-                        style: "height: 5px; background-color: black"
-                    });
+                    if (imInit()) {
+                        setAttr("style", "height: 5px; background-color: black");
+                    }
                 } imEnd();
 
 
                 imBeginDiv(); {
-                    imInit() && setAttributes({
-                        style: "padding: 10px; border: 1px solid black; display: inline-block",
-                    });
+                    if (imInit()) {
+                        setAttr("style", "padding: 10px; border: 1px solid black; display: inline-block");
+                    }
 
                     if (s.count < 500) {
                         // throw new Error("The count was way too low my dude");
@@ -419,7 +423,8 @@ function App() {
 
             imBeginDiv(); {
                 if (imInit()) {
-                    setAttributes({ class: [cn.row], style: "height: 4em" });
+                    setClass(cn.row);
+                    setStyle("height", "4em");
                 }
 
                 const n = 20;
@@ -453,7 +458,7 @@ function App() {
                 }
                 imEndList();
             } imEnd();
-
+            
             const gridState = imState(newGridState);
             imBeginList();
             if (nextListRoot() && s.grid) {
@@ -465,24 +470,26 @@ function App() {
                     nextListRoot();
 
                     imBeginDiv(); {
-                        imInit() && setAttributes({
-                            style: "display: flex;"
-                        });
+                        if (imInit()) {
+                            setAttr("style", "display: flex;");
+                        }
+
+                        const r = getCurrentRoot();
 
                         imBeginList();
                         for (let j = 0; j < values[i].length; j++) {
                             nextListRoot(); 
                             imBeginDiv(); {
                                 if (imInit()) {
-                                    setAttributes({
-                                        style: "display: inline-block; width: 5px; height: 5px"
-                                    });
+                                    setAttr("style", "display: inline-block; width: 50px; height: 50px; aspect-ratio: 1 / 1; border: 1px solid red;");
                                 }
 
+                                const mouse = getMouse();
+                                    ;
                                 if (elementHasMouseHover()) {
-                                    const mouse = getMouse();
+
+                                    values[i][j] = 1;
                                     if (mouse.leftMouseButton) {
-                                        values[i][j] = 1;
                                     }
                                 }
 
@@ -512,9 +519,9 @@ function App() {
             imEndList();
 
             imBeginDiv(); {
-                imInit() && setAttributes({
-                    style: `position: fixed; bottom: 10px; left: 10px`
-                });
+                if (imInit()) {
+                    setAttr("style", `position: fixed; bottom: 10px; left: 10px`);
+                }
 
                 Slider("period", s.setPeriod);
                 Slider("increment", s.setIncrement);
@@ -529,14 +536,14 @@ function App() {
             nextListRoot();
 
             imBeginDiv(); {
-                imInit() && setAttributes({
-                    style: `display: absolute;top:0;bottom:0;left:0;right:0;`
-                });
+                if (imInit()) {
+                    setAttr("style", `display: absolute;top:0;bottom:0;left:0;right:0;`);
+                }
 
                 imBeginDiv(); {
-                    imInit() && setAttributes({
-                        style: `display: flex; flex-direction: column; align-items: center; justify-content: center;`
-                    });
+                    if (imInit()) {
+                        setAttr("style", `display: flex; flex-direction: column; align-items: center; justify-content: center;`);
+                    }
 
                     imBeginDiv(); {
                         setInnerText("An error occured: " + errRef.val);
