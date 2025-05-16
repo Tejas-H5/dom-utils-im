@@ -3,7 +3,7 @@ import {
     imBeginEl, 
     imState, 
     imBeginList, 
-    nextListRoot, 
+    nextListSlot, 
     newUiRoot,
     imInit,
     imEnd,
@@ -11,13 +11,13 @@ import {
     setAttr,
     setStyle,
     imEndList,
-    elementHasMouseClick,
+    elementHasMousePress,
     elementHasMouseHover,
-    getMouse,
+    getImMouse,
     deltaTimeSeconds,
     imRef,
     abortListAndRewindUiStack,
-    initializeDomRootAnimiationLoop,
+    initializeImDomUtils,
     getCurrentRoot,
     imMemo,
     imBeginSpan,
@@ -48,7 +48,7 @@ function Button(buttonText: string, onClick: () => void) {
         button = imBeginEl(newButton); {
             setInnerText(buttonText);
 
-            if (elementHasMouseClick()) {
+            if (elementHasMousePress()) {
                 onClick();
             }
         };
@@ -77,7 +77,7 @@ function Slider(labelText: string, onChange: (val: number) => void) {
             setAttr("name", labelText)
 
             if (elementHasMouseHover()) {
-                const mouse = getMouse();
+                const mouse = getImMouse();
                 if (mouse.leftMouseButton) {
                     onChange(input.root.valueAsNumber);
                 }
@@ -116,7 +116,7 @@ function WallClock() {
     imBeginList();
     let n = value.val < 0 ? 1 : 2;
     for (let i = 0; i < n; i++) {
-        nextListRoot(); 
+        nextListSlot(); 
 
         imBeginDiv();  {
             setInnerText(new Date().toISOString());
@@ -332,7 +332,7 @@ function imPerfTimerOutput(fps: FpsCounterState) {
         } imEnd();
         // setStyle("transform", "rotate(" + angle + "deg)");
 
-        if (elementHasMouseClick()) {
+        if (elementHasMousePress()) {
             fps.baselineFrameMsFreq = 0;
         }
 
@@ -349,7 +349,7 @@ function App() {
     const l = imBeginList();
     try {
 
-        if (nextListRoot() && !errRef.val) {
+        if (nextListSlot() && !errRef.val) {
 
             const fps = imState(newFpsCounterState);
             startPerfTimer(fps);
@@ -378,21 +378,38 @@ function App() {
 
                 // sheesh. cant win with these people...
                 imBeginList();
-                if (nextListRoot() && s.count > 1000) {
+                if (nextListSlot() && s.count > 1000) {
                     imBeginDiv(); {
                         setInnerText("The count is too damn high!!");
                     } imEnd();
-                } else if (nextListRoot() && s.count < 1000) {
+                } else if (nextListSlot() && s.count < 1000) {
                     imBeginDiv(); {
                         setInnerText("The count is too damn low !!");
                     } imEnd();
                 } else {
-                    nextListRoot();
+                    nextListSlot();
                     imBeginDiv(); {
                         setInnerText("The count is too perfect!!");
                     } imEnd();
                 }
                 imEndList();
+
+                // Another way of doing the same thing as above:
+                imBeginDiv()
+                if (s.count > 1000) {
+                    setInnerText("The count is too damn high!!");
+                } 
+                imEnd();
+                imBeginDiv()
+                if (s.count < 1000) {
+                    setInnerText("The count is too damn low !!");
+                } 
+                imEnd()
+                imBeginDiv()
+                if (s.count === 1000) {
+                    setInnerText("The count is too perfect!!");
+                } 
+                imEnd();
 
                 imBeginDiv(); {
                     if (imInit()) {
@@ -411,7 +428,7 @@ function App() {
                     }
 
                     imBeginList();
-                    if (nextListRoot() && s.count < 2000) {
+                    if (nextListSlot() && s.count < 2000) {
                         WallClock();
                     }
                     imEndList();
@@ -442,7 +459,7 @@ function App() {
 
                 imBeginList();
                 for (let i = 0; i <= n; i++) {
-                    nextListRoot();
+                    nextListSlot();
                     imBeginDiv(); {
                         if (imInit()) {
                             setStyle("flex", "1");
@@ -461,13 +478,13 @@ function App() {
             
             const gridState = imState(newGridState);
             imBeginList();
-            if (nextListRoot() && s.grid) {
+            if (nextListSlot() && s.grid) {
                 const dt = deltaTimeSeconds();
                 const { values } = gridState;
 
                 imBeginList();
                 for (let i = 0; i < values.length; i++) {
-                    nextListRoot();
+                    nextListSlot();
 
                     imBeginDiv(); {
                         if (imInit()) {
@@ -478,13 +495,13 @@ function App() {
 
                         imBeginList();
                         for (let j = 0; j < values[i].length; j++) {
-                            nextListRoot(); 
+                            nextListSlot(); 
                             imBeginDiv(); {
                                 if (imInit()) {
                                     setAttr("style", "display: inline-block; width: 50px; height: 50px; aspect-ratio: 1 / 1; border: 1px solid red;");
                                 }
 
-                                const mouse = getMouse();
+                                const mouse = getImMouse();
                                     ;
                                 if (elementHasMouseHover()) {
 
@@ -533,7 +550,7 @@ function App() {
 
             stopPerfTimer(fps);
         } else {
-            nextListRoot();
+            nextListSlot();
 
             imBeginDiv(); {
                 if (imInit()) {
@@ -576,4 +593,4 @@ function rerenderApp() {
 }
 
 initCnStyles();
-initializeDomRootAnimiationLoop(rerenderApp, appRoot);
+initializeImDomUtils(rerenderApp, appRoot);

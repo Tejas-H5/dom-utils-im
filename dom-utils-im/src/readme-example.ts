@@ -1,4 +1,4 @@
-import { imBeginDiv, setInnerText, imBeginEl, imEnd, imState, imBeginList, nextListRoot, imEndList, elementHasMouseClick, initializeDomRootAnimiationLoop } from "src/utils/im-dom-utils";
+import { imBeginDiv, setInnerText, imBeginEl, imEnd, imState, imBeginList, nextListSlot, imEndList, elementHasMousePress, initializeDomRootAnimiationLoop } from "src/utils/im-dom-utils";
 
 function newButton() {
     return document.createElement("button");
@@ -18,14 +18,14 @@ function App() {
     imBeginDiv(); {
         imBeginEl(newButton); {
             setInnerText("Increment");
-            if (elementHasMouseClick()) {
+            if (elementHasMousePress()) {
                 state.count++;
             }
         } imEnd();
     } imEnd();
 
     imBeginList();
-    if (nextListRoot() && state.count > 10) {
+    if (nextListSlot() && state.count > 10) {
         imBeginDiv(); {
             setInnerText("Count is super high?!? aint no way bruh? ");
         } imEnd();
