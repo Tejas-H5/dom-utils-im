@@ -1,4 +1,17 @@
-import { getImKeys as getKeyboardEvents, imBeginDiv, imBeginList, imEnd, imEndList, imInit, initializeDomRootAnimiationLoop, setInnerText, setStyle, imBeginSpan, getImMouse, imTextSpan, setAttr, nextListSlot } from "./utils/im-dom-utils";
+import {
+    getImKeys as getKeyboardEvents,
+    imDiv,
+    imList,
+    imEnd,
+    imEndList,
+    imInit,
+    setStyle,
+    getImMouse,
+    imTextSpan,
+    setAttr,
+    nextListSlot,
+    initializeImDomUtils
+} from "./utils/im-dom-utils";
 
 const currentKeys = new Set<string>();
 
@@ -18,14 +31,14 @@ function render() {
         currentKeys.clear();
     }
 
-    imBeginList();
+    imList();
     for (const key of currentKeys) {
         nextListSlot();
         imTextSpan(key + ", ")
     }
     imEndList();
 
-    imBeginDiv(); {
+    imDiv(); {
         const SIZE = 50;
         if (imInit()) {
             setAttr("style", `position: absolute; width: ${SIZE}px; height: ${SIZE}px; background-color: #000`);
@@ -37,4 +50,4 @@ function render() {
     } imEnd();
 }
 
-initializeDomRootAnimiationLoop(render);
+initializeImDomUtils(render);

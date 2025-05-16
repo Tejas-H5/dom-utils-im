@@ -1,7 +1,18 @@
-// *IM* DOM-utils v0.1.009 - @Tejas-H5
+// *IM* DOM-utils v0.1.0010 - @Tejas-H5
 // A variation on DOM-utils with the immediate-mode API isntead of the normal one. I'm still deciding which one I will continue to use.
 // Right now, this one seems better, but the other one has a 'proven' track record of actually working.
 // But in a matter of hours/days, I was able to implement features in this framework that I wasn't able to for months/years in the other one...
+//
+// Conventions:
+// - All immediate mode methods should start with 'im', like imIf, imList, imDiv, imLayout, etc. etc.
+//      I found imBegin() to be too verbose, as things like imBeginList and imBeginIf were being typed A LOT.
+//      If we don't need to use Begin for methods that open a scope, then there needs to be some other way to delineate this.
+//      Or does there?
+//
+// - If this method opens up a scope that must be ended in a specific way, this must be stated in the documentation, 
+//      either with words, or via an example. 
+//      Ideally, if the opening method was imComponent, and we can't just end it with {@link imEnd},
+//      there should be a closing method called imEndComponent.
 
 import { hotAssert } from "./assert";
 
@@ -284,7 +295,7 @@ export function setRenderPoint(p: RenderPoint) {
  * }
  * ```
  *
- * See the docs for {@link imBeginList} for more info.
+ * See the docs for {@link imList} for more info.
  */
 export type UIRoot<E extends ValidElement = ValidElement> = {
     readonly t: typeof ITEM_UI_ROOT;
@@ -527,7 +538,7 @@ export type RenderFnArgs<A extends unknown[], T extends ValidElement = ValidElem
  * end();
  * ```
  */
-export function imBeginList(): ListRenderer {
+export function imList(): ListRenderer {
     // Don't access immediate mode state when immediate mode is disabled
     hotAssert(imDisabled === false);
 
@@ -553,9 +564,70 @@ export function imBeginList(): ListRenderer {
     return result;
 }
 
+/**
+ * Helpers to make conditional rendering with the list easier to type and read.
+ * Everythig this method does can also be done using {@link imList}/{@link imEndList} and {@link nextListSlot}
+ *
+ * ```ts
+ *  // Before:
+ *
+ *  imList();
+ *  if (nextSlot() && cond3) {
+ *       imComponent3();
+ *  }
+ *  if (nextSlot() && cond1) {
+ *      imComponent1();
+ *  } else if (nextSlot() && cond2) {
+ *      imComponent2();
+ *  }
+ *  imEndList();
+ *
+ *  // After
+ *
+ *  if (imIf() && cond3) {
+ *       imComponent3();
+ *  } imEndIf();
+ *
+ *  if (imIf() && cond1) {
+ *      imComponent1();
+ *  } else if (imElseIf() && cond2) {
+ *      imComponent2();
+ *  } imEndIf();
+ *
+ * ```
+ */
+export function imIf() {
+    imList();
+    nextListSlot();
+    return true;
+}
 
 /**
- * Read {@link imBeginList}'s doc first for context and examples.
+ * See {@link imIf}
+ */
+export function imElseIf() {
+    nextListSlot();
+    return true;
+}
+
+/**
+ * See {@link imIf}
+ */
+export function imElse() {
+    nextListSlot();
+    return true;
+}
+
+/**
+ * See {@link imIf}
+ */
+export function imEndIf() {
+    imEndList();
+}
+
+
+/**
+ * Read {@link imList}'s doc first for context and examples.
  *
  * You can optionally specify a {@link key}.
  * If no key is present, the same UIRoot that was rendered for the nth call of  nextRoot() will be re-used.
@@ -708,7 +780,7 @@ export function getCurrentRoot(): UIRoot {
 
 // You probably don't want to use this, if you can help it
 export function getCurrentListRendererInternal(): ListRenderer {
-    /** Can't call this method without opening a new list renderer (see {@link imBeginList}) */
+    /** Can't call this method without opening a new list renderer (see {@link imList}) */
     hotAssert(currentListRenderer !== undefined)
 
     return currentListRenderer;
@@ -733,7 +805,7 @@ function startRendering(r: UIRoot = appRoot, itemIdx: number, domIdx: number) {
 }
 
 
-export function imBeginEl<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
+export function imEl<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
     // Don't access immediate mode state when immediate mode is disabled
     hotAssert(imDisabled === false);
 
@@ -762,6 +834,33 @@ export function imBeginEl<E extends ValidElement = ValidElement>(elementSupplier
 
     return result as UIRoot<E>;
 } 
+
+/** 
+ * This method pops any element from the global element stack that we created via {@link imEl}.
+ * This is called `imEnd` instad of `end`, because `end` is a good variable name that we don't want to squat on.
+ */
+export function imEnd() {
+    const r = getCurrentRoot();
+
+    if (imEndRootInternal(r)) {
+        // we rendered nothing to r root, so we should just remove it.
+        // however, we may render to it again on a subsequent render.
+        __removeAllDomElementsFromUiRoot(r, false);
+    }
+
+    return true;
+}
+
+/** 
+ * Same as imEnd, but doesn't remove anything if we don't render anything.
+ * I've not used it yet.
+ */
+export function imEndMemoized() {
+    const r = getCurrentRoot();
+
+    // we rendered nothing to r root, do nothing.
+    imEndRootInternal(r)
+}
 
 function imEndRootInternal(r: UIRoot): boolean {
     // close out this UI Root.
@@ -797,32 +896,6 @@ function imEndRootInternal(r: UIRoot): boolean {
     return result;
 }
 
-/** 
- * This is called `imEnd` instad of `end`, because `end` is a good variable name that we don't want to squat on.
- * All methods that create immediate mode state are prefixed with `im`. 
- * All methods that create immediate state that need to be endeded later in some way are prefixed with `imBegin`.  
- */
-export function imEnd() {
-    const r = getCurrentRoot();
-
-    if (imEndRootInternal(r)) {
-        // we rendered nothing to r root, so we should just remove it.
-        // however, we may render to it again on a subsequent render.
-        __removeAllDomElementsFromUiRoot(r, false);
-    }
-
-    return true;
-}
-
-/** 
- * Same as imEnd, but doesn't remove anything if we don't render anything.
- */
-export function imEndMemoized() {
-    const r = getCurrentRoot();
-
-    // we rendered nothing to r root, do nothing.
-    imEndRootInternal(r)
-}
 
 function __popStack() {
     // fix the `current` variables
@@ -848,8 +921,8 @@ export function imEndList() {
     }
 
     // NOTE: the main reason why I won't make a third ITEM_COMPONENT_FENCE 
-    // to detect an incorrect number of calls to begin() and end() methods, is because
-    // most UI components will interlace imBeginList() and imBeginEl() methods frequently enough that
+    // to detect an incorrect number of calls to im() and imEnd() methods, is because
+    // most UI components will interlace imList() and imEl() methods frequently enough that
     // this assertion here or the one in imEnd() will already catch this bug most of the time.
     const l = getCurrentListRendererInternal();
 
@@ -911,20 +984,20 @@ export function newSpan() {
     return document.createElement("span");
 }
 
-export function imBeginDiv(): UIRoot<HTMLDivElement> {
-    return imBeginEl<HTMLDivElement>(newDiv);
+export function imDiv(): UIRoot<HTMLDivElement> {
+    return imEl<HTMLDivElement>(newDiv);
 }
 
-export function imBeginSpan(): UIRoot<HTMLSpanElement> {
-    return imBeginEl<HTMLSpanElement>(newSpan);
+export function imSpan(): UIRoot<HTMLSpanElement> {
+    return imEl<HTMLSpanElement>(newSpan);
 }
 
 export function imTextSpan(text: string) {
-    imBeginSpan(); setInnerText(text); imEnd();
+    imSpan(); setInnerText(text); imEnd();
 }
 
 export function imTextDiv(text: string) {
-    imBeginDiv(); setInnerText(text); imEnd();
+    imDiv(); setInnerText(text); imEnd();
 }
 
 
@@ -1163,9 +1236,7 @@ export function deltaTimeSeconds(): number {
 }
 
 let doRender = (isEvent: boolean) => {};
-
 let isRendering = false;
-
 let _isExcessEventRender = false;
 
 /**
@@ -1176,11 +1247,12 @@ let _isExcessEventRender = false;
  * This does mean that some expensive renders will become noticeably slow when you have multiple keys held down, for instance.
  *
  * ```ts
- * imBeginCanvas2D(); 
- * if (!isRenderEventDriven()) {
+ * imCanvas2D(); 
+ * if (!isExcessEventRender()) {
  *
  *      // draw expensive canvas thing
- * } imEnd();
+ * } 
+ * imEnd();
  * ```
  *
  */
@@ -1214,7 +1286,7 @@ export function initializeImDomUtils(renderFn: () => void, renderRoot?: UIRoot) 
         isRendering = true;
         startRendering(renderRoot, -1, -1);
 
-        imBeginFrame();
+        imFrame();
 
         renderFn();
 
@@ -1498,7 +1570,7 @@ export function imPreventScrollEventPropagation() {
     return state;
 }
 
-function imBeginFrame() {
+function imFrame() {
     // persistent things need to be reset every frame, for bubling order to remain consistent per render
     mouse.lastClickedElement = mouse.lastClickedElementOriginal;
     mouse.hoverElement = mouse.hoverElementOriginal;

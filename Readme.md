@@ -12,7 +12,17 @@ The code for an app will look something like this right now:
 
 ```ts
 
-import { imBeginDiv, setInnerText, imBeginEl, imEnd, imState, imBeginList, nextListRoot, startRendering, imEndList, elementHasMouseClick, initializeImEvents, initializeDomRootAnimiationLoop } from "src/utils/im-dom-utils";
+import {
+    imDiv,
+    setInnerText,
+    imEl,
+    imEnd,
+    imState,
+    elementHasMousePress,
+    initializeImDomUtils,
+    imIf,
+    imEndIf,
+} from "src/utils/im-dom-utils";
 
 function newButton() {
     return document.createElement("button");
@@ -25,36 +35,28 @@ function appState() {
 function App() {
     const state = imState(appState);
 
-    imBeginDiv(); {
+    imDiv(); {
         setInnerText("Count: " + state.count);
     } imEnd();
 
-    imBeginDiv(); {
-        imBeginEl(newButton); {
+    imDiv(); {
+        imEl(newButton); {
             setInnerText("Increment");
-            if (elementHasMouseClick()) {
+            if (elementHasMousePress()) {
                 state.count++;
             }
         } imEnd();
     } imEnd();
 
-    imBeginList();
-    if (nextListRoot() && state.count > 10) {
-        imBeginDiv(); {
+    if (imIf() && state.count > 10) {
+        imDiv(); {
             setInnerText("Count is super high?!? aint no way bruh? ");
         } imEnd();
-    }
-    imEndList();
+    } imEndIf();
 }
 
-function rerenderApp() { 
-    startRendering();
-    App();
-}
 
-// Kick-start the program by rendering it once.
-initializeImEvents();
-initializeDomRootAnimiationLoop(rerenderApp);
+initializeImDomUtils(App);
 
 ```
 

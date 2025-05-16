@@ -1,8 +1,8 @@
 import {
-    imBeginDiv, 
-    imBeginEl, 
+    imDiv, 
+    imEl, 
     imState, 
-    imBeginList, 
+    imList, 
     nextListSlot, 
     newUiRoot,
     imInit,
@@ -20,11 +20,15 @@ import {
     initializeImDomUtils,
     getCurrentRoot,
     imMemo,
-    imBeginSpan,
+    imSpan,
     imTextSpan,
     imStateInline,
     getNumImStateEntriesRendered,
     setClass,
+    imIf,
+    imElseIf,
+    imElse,
+    imEndIf,
 } from "src/utils/im-dom-utils";
 import { cn, initCnStyles } from "./utils/cn";
 
@@ -44,8 +48,8 @@ function newLabel() {
 function Button(buttonText: string, onClick: () => void) {
     let button;
 
-    imBeginDiv(); {
-        button = imBeginEl(newButton); {
+    imDiv(); {
+        button = imEl(newButton); {
             setInnerText(buttonText);
 
             if (elementHasMousePress()) {
@@ -60,13 +64,13 @@ function Button(buttonText: string, onClick: () => void) {
 }
 
 function Slider(labelText: string, onChange: (val: number) => void) {
-    const root = imBeginDiv(); {
-        imBeginEl(newLabel); {
+    const root = imDiv(); {
+        imEl(newLabel); {
             setAttr("for", labelText);
             setInnerText(labelText);
         };
         imEnd();
-        const input = imBeginEl<HTMLInputElement>(newInput); {
+        const input = imEl<HTMLInputElement>(newInput); {
             if (imInit()) {
                 setAttr("type", "range");
                 setAttr("min", "1");
@@ -101,24 +105,24 @@ function WallClock() {
     if (value.val > 1) value.val = 1;
     if (value.val < -1) value.val = -1;
 
-    imBeginDiv(); {
-        imBeginDiv(); {
+    imDiv(); {
+        imDiv(); {
             const r = getCurrentRoot();
             setInnerText("Destroyed: " + r.destroyed);
         } imEnd();
     } imEnd();
-    imBeginDiv(); {
+    imDiv(); {
         setInnerText("brownian motion: " + value.val + "");
     } imEnd();
-    imBeginDiv(); {
+    imDiv(); {
         setInnerText("FPS: " + (1 / dt).toPrecision(2) + "");
     } imEnd();
-    imBeginList();
+    imList();
     let n = value.val < 0 ? 1 : 2;
     for (let i = 0; i < n; i++) {
         nextListSlot(); 
 
-        imBeginDiv();  {
+        imDiv();  {
             setInnerText(new Date().toISOString());
         } imEnd();
     }
@@ -300,7 +304,7 @@ function stopPerfTimer(fps: FpsCounterState) {
 }
 
 function imPerfTimerOutput(fps: FpsCounterState) {
-    imBeginDiv(); {
+    imDiv(); {
         if (imInit()) {
             setStyle("position", "absolute");
             setStyle("top", "5px");
@@ -323,7 +327,7 @@ function imPerfTimerOutput(fps: FpsCounterState) {
 
         imTextSpan(fps.framesMsRounded + "ms frame, ");
 
-        imBeginSpan(); {
+        imSpan(); {
             const fpsChanged = imMemo(fps.renderMsRounded);
             if (fpsChanged) {
                 setStyle("color", fps.renderMsRounded / fps.baselineFrameMs > 0.5 ? "red" : "");
@@ -346,79 +350,55 @@ function App() {
 
     const s = imState(newAppState);
 
-    const l = imBeginList();
+    const l = imList();
     try {
-
         if (nextListSlot() && !errRef.val) {
 
             const fps = imState(newFpsCounterState);
             startPerfTimer(fps);
             imPerfTimerOutput(fps);
 
-            imBeginDiv(); {
+            imDiv(); {
                 Button("Click me!", () => {
                     alert("noo");
                 });
-                imBeginDiv(); {
+                imDiv(); {
                     setInnerText("Hello world! ");
                 }
                 imEnd();
-                imBeginDiv(); {
+                imDiv(); {
                     setInnerText("Lets goo");
                 }
                 imEnd();
-                imBeginDiv(); {
+                imDiv(); {
                     setInnerText("Count: " + s.count);
                 }
                 imEnd();
-                imBeginDiv(); {
+                imDiv(); {
                     setInnerText("Period: " + s.period);
                 }
                 imEnd();
 
                 // sheesh. cant win with these people...
-                imBeginList();
-                if (nextListSlot() && s.count > 1000) {
-                    imBeginDiv(); {
+                if (imIf() && s.count > 1000) {
+                    imDiv(); {
                         setInnerText("The count is too damn high!!");
                     } imEnd();
-                } else if (nextListSlot() && s.count < 1000) {
-                    imBeginDiv(); {
+                } else if (imElseIf() && s.count < 1000) {
+                    imDiv(); {
                         setInnerText("The count is too damn low !!");
                     } imEnd();
-                } else {
-                    nextListSlot();
-                    imBeginDiv(); {
+                } else { imElse();
+                    imDiv(); {
                         setInnerText("The count is too perfect!!");
                     } imEnd();
-                }
-                imEndList();
-
-                // Another way of doing the same thing as above:
-                imBeginDiv()
-                if (s.count > 1000) {
-                    setInnerText("The count is too damn high!!");
-                } 
-                imEnd();
-                imBeginDiv()
-                if (s.count < 1000) {
-                    setInnerText("The count is too damn low !!");
-                } 
-                imEnd()
-                imBeginDiv()
-                if (s.count === 1000) {
-                    setInnerText("The count is too perfect!!");
-                } 
-                imEnd();
-
-                imBeginDiv(); {
+                } imEndIf();
+                imDiv(); {
                     if (imInit()) {
                         setAttr("style", "height: 5px; background-color: black");
                     }
                 } imEnd();
-
-
-                imBeginDiv(); {
+                imDiv(); {
                     if (imInit()) {
                         setAttr("style", "padding: 10px; border: 1px solid black; display: inline-block");
                     }
@@ -427,18 +407,16 @@ function App() {
                         // throw new Error("The count was way too low my dude");
                     }
 
-                    imBeginList();
-                    if (nextListSlot() && s.count < 2000) {
+                    if (imIf() && s.count < 2000) {
                         WallClock();
-                    }
-                    imEndList();
+                    } imEndIf();
                 }
                 imEnd();
 
             }
             imEnd();
 
-            imBeginDiv(); {
+            imDiv(); {
                 if (imInit()) {
                     setClass(cn.row);
                     setStyle("height", "4em");
@@ -457,10 +435,10 @@ function App() {
                     pingPong.pos += pingPong.dir;
                 } 
 
-                imBeginList();
+                imList();
                 for (let i = 0; i <= n; i++) {
                     nextListSlot();
-                    imBeginDiv(); {
+                    imDiv(); {
                         if (imInit()) {
                             setStyle("flex", "1");
                             setStyle("height", "100%");
@@ -477,26 +455,23 @@ function App() {
             } imEnd();
             
             const gridState = imState(newGridState);
-            imBeginList();
-            if (nextListSlot() && s.grid) {
+            if (imIf() && s.grid) {
                 const dt = deltaTimeSeconds();
                 const { values } = gridState;
 
-                imBeginList();
+                imList();
                 for (let i = 0; i < values.length; i++) {
                     nextListSlot();
 
-                    imBeginDiv(); {
+                    imDiv(); {
                         if (imInit()) {
                             setAttr("style", "display: flex;");
                         }
 
-                        const r = getCurrentRoot();
-
-                        imBeginList();
+                        imList();
                         for (let j = 0; j < values[i].length; j++) {
                             nextListSlot(); 
-                            imBeginDiv(); {
+                            imDiv(); {
                                 if (imInit()) {
                                     setAttr("style", "display: inline-block; width: 50px; height: 50px; aspect-ratio: 1 / 1; border: 1px solid red;");
                                 }
@@ -532,10 +507,9 @@ function App() {
                     } imEnd();
                 }
                 imEndList();
-            } 
-            imEndList();
+            } imEndIf();
 
-            imBeginDiv(); {
+            imDiv(); {
                 if (imInit()) {
                     setAttr("style", `position: fixed; bottom: 10px; left: 10px`);
                 }
@@ -552,21 +526,21 @@ function App() {
         } else {
             nextListSlot();
 
-            imBeginDiv(); {
+            imDiv(); {
                 if (imInit()) {
                     setAttr("style", `display: absolute;top:0;bottom:0;left:0;right:0;`);
                 }
 
-                imBeginDiv(); {
+                imDiv(); {
                     if (imInit()) {
                         setAttr("style", `display: flex; flex-direction: column; align-items: center; justify-content: center;`);
                     }
 
-                    imBeginDiv(); {
+                    imDiv(); {
                         setInnerText("An error occured: " + errRef.val);
                     }
                     imEnd();
-                    imBeginDiv(); {
+                    imDiv(); {
                         setInnerText("Click below to retry.")
                     }
                     imEnd();
