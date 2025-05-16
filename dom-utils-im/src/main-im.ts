@@ -3,7 +3,7 @@ import {
     imEl, 
     imState, 
     imList, 
-    nextListSlot, 
+    nextListRoot, 
     newUiRoot,
     imInit,
     imEnd,
@@ -16,36 +16,29 @@ import {
     getImMouse,
     deltaTimeSeconds,
     imRef,
-    abortListAndRewindUiStack,
     initializeImDomUtils,
     getCurrentRoot,
     imMemo,
     imSpan,
     imTextSpan,
     imStateInline,
-    getNumImStateEntriesRendered,
     setClass,
     imIf,
     imElseIf,
     imElse,
     imEndIf,
+    getNumItemsRendered,
+    imTry,
+    imCatch,
+    imEndTryCatch,
 } from "src/utils/im-dom-utils";
 import { cn, initCnStyles } from "./utils/cn";
-
-
-function newInput() {
-    return document.createElement("input");
-}
 
 function newButton() {
     return document.createElement("button");
 }
 
-function newLabel() {
-    return document.createElement("label");
-}
-
-function Button(buttonText: string, onClick: () => void) {
+function imButton(buttonText: string, onClick: () => void) {
     let button;
 
     imDiv(); {
@@ -55,12 +48,18 @@ function Button(buttonText: string, onClick: () => void) {
             if (elementHasMousePress()) {
                 onClick();
             }
-        };
-        imEnd();
-    }
-    imEnd();
+        }; imEnd();
+    } imEnd();
 
     return button;
+}
+
+function newLabel() {
+    return document.createElement("label");
+}
+
+function newInput() {
+    return document.createElement("input");
 }
 
 function Slider(labelText: string, onChange: (val: number) => void) {
@@ -72,6 +71,7 @@ function Slider(labelText: string, onChange: (val: number) => void) {
         imEnd();
         const input = imEl<HTMLInputElement>(newInput); {
             if (imInit()) {
+                setAttr("width", "1000px");
                 setAttr("type", "range");
                 setAttr("min", "1");
                 setAttr("max", "300");
@@ -99,12 +99,13 @@ function newWallClockState() {
 
 function WallClock() {
     const dt = deltaTimeSeconds();
-    const value = imState(newWallClockState);
+    const s = imState(newWallClockState);
 
-    value.val += (-0.5 + Math.random()) * 0.02;
-    if (value.val > 1) value.val = 1;
-    if (value.val < -1) value.val = -1;
+    s.val += (-0.5 + Math.random()) * 0.02;
+    if (s.val > 1) s.val = 1;
+    if (s.val < -1) s.val = -1;
 
+    // The retained-mode code is actually more compact here!
     imDiv(); {
         imDiv(); {
             const r = getCurrentRoot();
@@ -112,15 +113,15 @@ function WallClock() {
         } imEnd();
     } imEnd();
     imDiv(); {
-        setInnerText("brownian motion: " + value.val + "");
+        setInnerText("brownian motion: " + s.val + "");
     } imEnd();
     imDiv(); {
         setInnerText("FPS: " + (1 / dt).toPrecision(2) + "");
     } imEnd();
     imList();
-    let n = value.val < 0 ? 1 : 2;
+    let n = s.val < 0 ? 1 : 2;
     for (let i = 0; i < n; i++) {
-        nextListSlot(); 
+        nextListRoot(); 
 
         imDiv();  {
             setInnerText(new Date().toISOString());
@@ -340,26 +341,26 @@ function imPerfTimerOutput(fps: FpsCounterState) {
             fps.baselineFrameMsFreq = 0;
         }
 
-        imTextSpan("Text span: " + getNumImStateEntriesRendered());
+        imTextSpan("Text span: " + getNumItemsRendered());
 
     } imEnd();
 }
 
-function App() {
+function imApp() {
     const errRef = imRef<any>();
 
     const s = imState(newAppState);
 
-    const l = imList();
+    const l = imTry();
     try {
-        if (nextListSlot() && !errRef.val) {
+        if (imIf() && !errRef.val) {
 
             const fps = imState(newFpsCounterState);
             startPerfTimer(fps);
             imPerfTimerOutput(fps);
 
             imDiv(); {
-                Button("Click me!", () => {
+                imButton("Click me!", () => {
                     alert("noo");
                 });
                 imDiv(); {
@@ -388,7 +389,8 @@ function App() {
                     imDiv(); {
                         setInnerText("The count is too damn low !!");
                     } imEnd();
-                } else { imElse();
+                } else { 
+                    imElse();
                     imDiv(); {
                         setInnerText("The count is too perfect!!");
                     } imEnd();
@@ -437,7 +439,7 @@ function App() {
 
                 imList();
                 for (let i = 0; i <= n; i++) {
-                    nextListSlot();
+                    nextListRoot();
                     imDiv(); {
                         if (imInit()) {
                             setStyle("flex", "1");
@@ -461,7 +463,7 @@ function App() {
 
                 imList();
                 for (let i = 0; i < values.length; i++) {
-                    nextListSlot();
+                    nextListRoot();
 
                     imDiv(); {
                         if (imInit()) {
@@ -470,19 +472,14 @@ function App() {
 
                         imList();
                         for (let j = 0; j < values[i].length; j++) {
-                            nextListSlot(); 
+                            nextListRoot(); 
                             imDiv(); {
                                 if (imInit()) {
                                     setAttr("style", "display: inline-block; width: 50px; height: 50px; aspect-ratio: 1 / 1; border: 1px solid red;");
                                 }
 
-                                const mouse = getImMouse();
-                                    ;
                                 if (elementHasMouseHover()) {
-
                                     values[i][j] = 1;
-                                    if (mouse.leftMouseButton) {
-                                    }
                                 }
 
                                 // NOTE: usually you would do this with a CSS transition if you cared about performance, but
@@ -516,15 +513,15 @@ function App() {
 
                 Slider("period", s.setPeriod);
                 Slider("increment", s.setIncrement);
-                Button("Toggle grid", s.toggleGrid);
-                Button("Increment count", s.incrementCount);
-                Button("Decrement count", s.decrementCount);
+                imButton("Toggle grid", s.toggleGrid);
+                imButton("Increment count", s.incrementCount);
+                imButton("Decrement count", s.decrementCount);
             }
             imEnd();
 
             stopPerfTimer(fps);
         } else {
-            nextListSlot();
+            imElse();
 
             imDiv(); {
                 if (imInit()) {
@@ -545,25 +542,26 @@ function App() {
                     }
                     imEnd();
 
-                    Button("Retry", () => {
+                    imButton("Retry", () => {
                         s.count = 1000;
                         errRef.val = null;
                     });
                 } imEnd();
             } imEnd();
-        }
+        } imEndIf();
     } catch(err) {
-        abortListAndRewindUiStack(l);
+        imCatch(l);
+
         console.error(err);
         errRef.val = err;
     }
-    imEndList();
+    imEndTryCatch();
 }
 
 const appRoot = newUiRoot(() => document.body);
 
 function rerenderApp() {
-    App();
+    imApp();
 }
 
 initCnStyles();

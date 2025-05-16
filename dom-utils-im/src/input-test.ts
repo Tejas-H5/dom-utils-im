@@ -9,7 +9,7 @@ import {
     getImMouse,
     imTextSpan,
     setAttr,
-    nextListSlot,
+    nextListRoot,
     initializeImDomUtils
 } from "./utils/im-dom-utils";
 
@@ -33,7 +33,7 @@ function render() {
 
     imList();
     for (const key of currentKeys) {
-        nextListSlot();
+        nextListRoot();
         imTextSpan(key + ", ")
     }
     imEndList();

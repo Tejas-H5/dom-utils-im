@@ -21,6 +21,12 @@ function Slider(rg: RenderGroup<{
             rg.attr("for", s => s.labelText),
             rg.text(s => s.labelText),
         ]),
+        // I thought this was a good idea at the time, but it wasn't. 
+        // This is because if I render more things underneath, then
+        // Those handlers actually get added before the ones
+        // inside this function.
+        // so the order of events is no longer what you think it is.
+        // This has resulted in bugs.
         () => {
             const input = el<HTMLInputElement>("INPUT", {
                 style: "width: 1000px",
@@ -149,7 +155,7 @@ function App(rg: RenderGroup) {
         }
     }
 
-    // TODO: error boundary
+    // TODO: error boundary (I wasnt able to implement it here for years)
 
     return div({}, [
         div({}, "Hello world! "),

@@ -1,4 +1,4 @@
-// *IM* DOM-utils v0.1.0010 - @Tejas-H5
+// *IM* DOM-utils v0.1.0011 - @Tejas-H5
 // A variation on DOM-utils with the immediate-mode API isntead of the normal one. I'm still deciding which one I will continue to use.
 // Right now, this one seems better, but the other one has a 'proven' track record of actually working.
 // But in a matter of hours/days, I was able to implement features in this framework that I wasn't able to for months/years in the other one...
@@ -147,14 +147,12 @@ export function getElementExtentNormalized(
 }
 
 ///////// 
-// Immediate-mode dom renderer. I've replaced the old render-groups approach with this thing. 
-// It solves a lot of issues I've had with the old renderer, at the cost of being a bit more complicated,
-// and requiring a bit more compute per-render. But the performance is fairly similar.
-//
-// This API prioritizes code aesthetics and colocation of logic, while 
-// avoiding any 'diffing' logic, which will typically encourage bad UI code and
-// terrible performance characteristics that are hard to move away from.
-// It also assumes that creating new function callbacks in every render has a near-zero overhead. 
+// The immediate-mode rendering API.
+// You might think I made this for performance, but I didn't. 
+// What I really wanted, was a UI framework that lets me colocate logic and UI, and composes correctly
+// i.e There is never a scenario where I _have_ to create a function or a class to get some sort of 
+// component-like behavior, and I can put 'state' as close to some UI as needed, so that we can
+// evolve better abstractions.
 
 const currentStack: (UIRoot | ListRenderer)[] = [];
 let itemsRendered = 0;
@@ -234,68 +232,76 @@ export function setRenderPoint(p: RenderPoint) {
 }
 
 /**
- * This class builds an immediate-mode tree, and stores immediate mode state for a component.
- * See {@link ImmediateModeArray} to learn what 'immediate mode state' is. 
- *
- * Once the immediatem 
- *
- * ```
- *  - [state]
- *  - [state]
- *  - [dom node ui root]
- *      ...
- *  - [dom node ui root]
- *      ...
- *  - [dom node ui root]
- *      ...
- *  - [list renderer]
- *      - [list renderer ui root]
- *          ...
- *      - [list renderer ui root]
- *          ...
- * ```
- *
- * Once a UIRoot is created, it has no specific shape. However, once a function has completed
- * rendering to it, it will call __end() on this root, and cause it to lock it's
- * shape. From that point onwards, it is assumed (and heavily asserted) that every subsequent rerender to a particular
- * root will create the exact same number of state, dom node, and list renderer entries, or zero entries if 
- * we want to detatch it's DOM elements.
- *
- *
- * This allows state and DOM-nodes to be created just once, while allowing other code and computations to remain local to 
- * the place that is actually using it. 
- *
- * However, it means that you can't do basic things like this:
+ * Whenever your app starts rendering, a {@link UIRoot} backed by the DOM root is pushed onto {@link currentStack}.
+ * {@link imEl} will create a {@link UIRoot} backed by a custom DOM node, and push it onto {@link currentStack}.
+ * {@link imEnd} will pop a {@link UIRoot} from {@link currentStack}.
+ * {@link getCurrentRoot} can be used to get the current UIRoot.
  *
  * ```ts
- * function Component(val: number) {
- *      if (number > 10) {
- *          Component1();
- *      } else {
- *          Component2();
+ * function imApp() {
+ *     r = getCurrentRoot()  // assertion failed - no current root
+ *     imDiv(); {
+ *          r = getCurrentRoot() // div that we rendered above
+ *     } imEnd();
+ *     r = getCurrentRoot()  // assertion failed - no current root
+ * }
+ * ```
+ *
+ * In the first render, any number of things can be rendered. 
+ * To be more specific, a 'thing' is an immediate mode state entry. 
+ * Only 3 methods can create im-state entries - {@link imEl}, {@link imState}, and {@link imList}.
+ * In every subsequent render, the same number of im-state entries must be 'created' in the same order.
+ * This is because in subsequent renders, calls to the im-state functions don't recreate state, but 
+ * increment an array index, and retrieve the state they created in the first render.
+ * 
+ * For example:
+ *
+ * ```ts
+ * // Valid
+ * function imApp() {
+ *     imDiv(); imEnd();
+ * }
+ *
+ * // Not valid
+ * let n = 0;
+ * function imApp() {
+ *      n++;
+ *      for (let i = 0; i < n; i++) {
+ *          // As soon as n is incremented, the app will (ideally) throw an Error, complaining about a different number of 
+ *          // things being rendered. // TODO: fix the current code, which doesn't care if the number of things keeps growing, and only complains when it shrinks
+ *          imDiv(); imEnd{}; 
  *      }
  * }
- * ```
  *
- * Because more likely than not, Component1 and Component2 will have completly different state and dom elements.
- * You'll need to use a different UI root to render different types of components.
- *
- * This can be achieved by treating conditional rendering as a special case of list rendering:
- *
- * ```
- *
- * function Component(val: number) {
- *      beginList();
- *      if (nextRoot() && number > 10) {
+ * // Also not valid
+ * let n = 0;
+ * function imApp() {
+ *      n++
+ *      if (n < 10) {
  *          Component1();
  *      } else {
- *          nextRoot();
- *          Component2();
- *      } endList();
+ *          // This is especially bad, because every im-state call in Component2 will retrieve state that was
+ *          // created by Component1, and none of it will line up at all. You will corrupt your data, basically.
+ *          // I haven't been able to think of any good safeguards against this.
+ *          Component2();   
+ *      }
  * }
+ *
  * ```
  *
- * See the docs for {@link imList} for more info.
+ * Then how the heck do we do conditional rendering, or list rendering, AKA anything actually useful?
+ * You'll need to take a look at:
+ * list rendering:
+ *      {@link imList}.
+ * conditional rendering helpers (they are just variants on `imList`):
+ *      {@link imIf}
+ *      {@link imElseIf}
+ *      {@link imElse}
+ * control flow helpers (they are also just variants on `imList`):
+ *      {@link imTry}
+ *      {@link imCatch}
+ *      {@link imSwitch}
+ *
  */
 export type UIRoot<E extends ValidElement = ValidElement> = {
     readonly t: typeof ITEM_UI_ROOT;
@@ -535,7 +541,7 @@ export type RenderFnArgs<A extends unknown[], T extends ValidElement = ValidElem
  *          RenderComponent();
  *      } end();
  * }
- * end();
+ * imEnd();
  * ```
  */
 export function imList(): ListRenderer {
@@ -566,62 +572,132 @@ export function imList(): ListRenderer {
 
 /**
  * Helpers to make conditional rendering with the list easier to type and read.
- * Everythig this method does can also be done using {@link imList}/{@link imEndList} and {@link nextListSlot}
  *
  * ```ts
- *  // Before:
- *
- *  imList();
- *  if (nextSlot() && cond3) {
- *       imComponent3();
- *  }
- *  if (nextSlot() && cond1) {
- *      imComponent1();
- *  } else if (nextSlot() && cond2) {
- *      imComponent2();
- *  }
- *  imEndList();
- *
- *  // After
- *
- *  if (imIf() && cond3) {
- *       imComponent3();
- *  } imEndIf();
- *
  *  if (imIf() && cond1) {
  *      imComponent1();
  *  } else if (imElseIf() && cond2) {
  *      imComponent2();
+ *  } else {
+ *      imElse()
+ *      imComponent3();
  *  } imEndIf();
+ * ```
  *
+ * Everythig this method does can also be done using {@link imList}, {@link imEndList} and {@link nextListRoot},
+ * but you have to type more, and I feel that code doesn't evolve correctly with 
+ * that approach. For example, the following code is valid:
+ *
+ * ```ts
+ *  imList();
+ *  if (nextSlot() && cond0) {
+ *      imComponent0();
+ *  }   
+ *  // We don't need an imEndList() and imBeginList() here, so we won't add it.
+ *  // However, this has the consequence that the if-statement above is always grouped with
+ *  // the one below, sometimes unnecessarily, making it harder to spot potential refactorings.
+ *  if (nextSlot() && cond1) {
+ *      imComponent1();
+ *  } else if (nextSlot() && cond2) {
+ *      imComponent2();
+ *  } else {
+ *      nextSlot();
+ *      imComponent3();
+ *  }
+ *  imEndList();
  * ```
  */
 export function imIf() {
     imList();
-    nextListSlot();
+    nextListRoot();
     return true;
 }
 
 /**
- * See {@link imIf}
+ * Improves readability of imList being used for a switch.
+ * ```ts
+ * imSwitch(key);
+ * switch(key) {
+ *     case 1: imComponent1(); break;
+ *     case 2: imComponent2(); break;
+ * }
+ * imEndSwitch();
+ * ```
  */
+export function imSwitch(key: ValidKey) {
+    imList();
+    nextListRoot(key);
+}
+
+/** See {@link imSwitch} */
+export function imEndSwitch() {
+    imEndList();
+}
+
+/** See {@link imIf} */
 export function imElseIf() {
-    nextListSlot();
+    nextListRoot();
     return true;
 }
 
-/**
- * See {@link imIf}
- */
+/** See {@link imIf} */
 export function imElse() {
-    nextListSlot();
+    nextListRoot();
     return true;
 }
 
-/**
- * See {@link imIf}
- */
+/** See {@link imIf} */
 export function imEndIf() {
+    imEndList();
+}
+
+/**
+ * Helpers for implementing try-catch.
+ * You can also do this with {@link imList}/{@link imEndList} and {@link nextListRoot},
+ * but you need to know what you're doing, and it is annoying to remember.
+ *
+ * ```ts
+ * const errorRef = imRef<any>();
+ *
+ * const l = imTry();
+ * try {
+ *      if (imIf() && !errorRef.val) {
+ *          imComponent1();
+ *      } else {
+ *          imElse()
+ *          imErrorStateComponent();
+ *      }
+ * } catch (e) {
+ *      // unmounts imComponent1 immediately, rewinds the stack back to this list.
+ *      imCatch(l);     
+ *
+ *      // NOTE: you can't and shouldn't render any components in this region, since the
+ *      // app rerenders every frame, so the only way to keep a component you render here on the screen
+ *      // is by throwing the same Error every frame. 
+ *      // Aside from this being a bad idea, this typically won't happen if the Error was thrown in
+ *      // an if-statement that handles a single-frame event like a mouse click or keyboard input, for example.
+ *      // You'll need to do something else instead!
+ *
+ *      console.error("An error occured while rendering: ", e);
+ *      errorRef.val = e;
+ * } 
+ * imEndTryCatch();
+ *
+ * ```
+ */
+export function imTry(): ListRenderer {
+    return imList();
+}
+
+/** See {@link imTry} */
+export function imCatch(l: ListRenderer) {
+    abortListAndRewindUiStack(l);
+    disableIm();
+}
+
+/** See {@link imTry} */
+export function imEndTryCatch() {
+    enableIm();
     imEndList();
 }
 
@@ -630,15 +706,16 @@ export function imEndIf() {
  * Read {@link imList}'s doc first for context and examples.
  *
  * You can optionally specify a {@link key}.
- * If no key is present, the same UIRoot that was rendered for the nth call of  nextRoot() will be re-used.
  * If a key is present, the same UIRoot that was rendered for that particular key will be re-used. Make sure
  *      to not reuse the same key twice.
+ *
+ * If no key is present, the same UIRoot that was rendered for the nth call of nextListRoot() without a key will be re-used.
  *
  * There is no virtue in always specifying a key. Only do it when actually necessary.
  *
  * See the {@link UIRoot} docs for more info on what a 'UIRoot' even is, what it's limitations are, and how to effectively (re)-use them.
  */
-export function nextListSlot(key?: ValidKey) {
+export function nextListRoot(key?: ValidKey) {
     if (currentRoot) {
         imEnd();
     }
@@ -1585,7 +1662,7 @@ function imEndFrame() {
     itemsRendered = 0;
 }
 
-export function getNumImStateEntriesRendered() {
+export function getNumItemsRendered() {
     return itemsRenderedLastFrame;
 }
 
