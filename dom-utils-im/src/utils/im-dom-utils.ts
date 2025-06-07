@@ -441,7 +441,7 @@ export function __onRemoveUiRoot(r: UIRoot, destroy: boolean) {
             try {
                 d();
             } catch (e) {
-                console.log("A destructor threw an exception: ", e);
+                console.error("A destructor threw an error: ", e);
             }
         }
     }
@@ -889,7 +889,7 @@ function startRendering(r: UIRoot = appRoot, itemIdx: number, domIdx: number) {
     __beginUiRoot(r, itemIdx, domIdx);
 }
 
-export function imBeginRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
+export function imUnappendedRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
     // Don't access immediate mode state when immediate mode is disabled
     hotAssert(imDisabled === false);
 
@@ -911,13 +911,23 @@ export function imBeginRoot<E extends ValidElement = ValidElement>(elementSuppli
         items.push(result);
     }
 
-    r.hasRealChildren = true;
-    appendToDomRoot(r.domAppender, result.domAppender.root);
-
-    __beginUiRoot(result, -1, -1);
-
     return result as UIRoot<E>;
 } 
+
+export function imBeginExistingRoot<E extends ValidElement = ValidElement>(root: UIRoot<E>) {
+    const r = getCurrentRoot();
+
+    r.hasRealChildren = true;
+    appendToDomRoot(r.domAppender, root.domAppender.root);
+
+    __beginUiRoot(root, -1, -1);
+}
+
+export function imBeginRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
+    const result = imUnappendedRoot(elementSupplier);
+    imBeginExistingRoot(result);
+    return result;
+}
 
 /** 
  * This method pops any element from the global element stack that we created via {@link imBeginRoot}.
@@ -1609,7 +1619,6 @@ function initializeImEvents() {
         mouse.scrollWheel += e.deltaX + e.deltaY + e.deltaZ;
         mouse.hoverElementOriginal = e.target;
         e.preventDefault();
-        console.log("[Scrolling]: ", mouse.scrollWheel);
     });
     document.addEventListener("keydown", (e) => {
         keyboardEvents.keyDown = e;

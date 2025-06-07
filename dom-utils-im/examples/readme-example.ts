@@ -8,6 +8,10 @@ import {
     imIf,
     imEndIf,
     imBeginRoot,
+    imFor,
+    imEndFor,
+    nextListRoot,
+    imTextSpan,
 } from "src/utils/im-dom-utils";
 
 function newButton() {
@@ -23,12 +27,14 @@ function newInput() {
 }
 
 function appState(): {
+    lastId: number;
     todoListItems: {
         id: string;
         text: string;
     }[];
 } {
     return { 
+        lastId: 100,
         todoListItems: [],
     };
 }
@@ -42,16 +48,23 @@ function App() {
         imBeginRoot(newButton); {
             setInnerText("Add");
             if (elementHasMousePress()) {
-                s.count++;
+                s.todoListItems.push({
+                    id: (s.lastId++).toString(),
+                    text: "TODO: add a text input here"
+                });
             }
         } imEnd();
     } imEnd();
-
-    if (imIf() && s.count > 10) {
-        imDiv(); {
-            setInnerText("Count is super high?!? aint no way bruh? ");
-        } imEnd();
-    } imEndIf();
+    imDiv(); {
+        imFor(); for (const item of s.todoListItems) {
+            // Don't actually need to use item.id as the key here. 
+            // re-ordering DOM nodes can be more expensive than just setting new text.
+            nextListRoot(item.id); 
+            imDiv(); {
+                imTextSpan(item.text);
+            } imEnd();
+        } imEndFor();
+    } imEnd();
 }
 
 
