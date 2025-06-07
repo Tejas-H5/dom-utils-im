@@ -1,40 +1,53 @@
 import {
     imDiv,
     setInnerText,
-    imEl,
     imEnd,
     imState,
     elementHasMousePress,
     initializeImDomUtils,
     imIf,
     imEndIf,
+    imBeginRoot,
 } from "src/utils/im-dom-utils";
 
 function newButton() {
     return document.createElement("button");
 }
 
-function appState() {
-    return { count: 0 };
+function newH3() {
+    return document.createElement("h3");
+}
+
+function newInput() {
+    return document.createElement("input");
+}
+
+function appState(): {
+    todoListItems: {
+        id: string;
+        text: string;
+    }[];
+} {
+    return { 
+        todoListItems: [],
+    };
 }
 
 function App() {
-    const state = imState(appState);
+    const s = imState(appState);
+
+    imBeginRoot(newH3); setInnerText("TODO list"); imEnd();
 
     imDiv(); {
-        setInnerText("Count: " + state.count);
-    } imEnd();
-
-    imDiv(); {
-        imEl(newButton); {
-            setInnerText("Increment");
+        imBeginRoot(newButton); {
+            setInnerText("Add");
             if (elementHasMousePress()) {
-                state.count++;
+                s.count++;
             }
         } imEnd();
     } imEnd();
 
-    if (imIf() && state.count > 10) {
+    if (imIf() && s.count > 10) {
         imDiv(); {
             setInnerText("Count is super high?!? aint no way bruh? ");
         } imEnd();

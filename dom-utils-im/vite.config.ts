@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 import { viteSingleFile } from "vite-plugin-singlefile";
 
 export default defineConfig({
-  base: "/Pooling-framwork/",
+  base: "/im-dom-utils/",
   plugins: [viteSingleFile()],
   build: {
     // Would like people to see the source code of the thing they're using actually - it should 

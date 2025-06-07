@@ -1,8 +1,6 @@
 import {
     imDiv, 
-    imEl, 
     imState, 
-    imList, 
     nextListRoot, 
     newUiRoot,
     imInit,
@@ -10,7 +8,6 @@ import {
     setInnerText,
     setAttr,
     setStyle,
-    imEndList,
     elementHasMousePress,
     elementHasMouseHover,
     getImMouse,
@@ -30,9 +27,12 @@ import {
     getNumItemsRendered,
     imTry,
     imCatch,
-    imEndTryCatch,
+    imBeginRoot,
+    imFor,
+    imEndFor,
+    imEndTry,
 } from "src/utils/im-dom-utils";
-import { cn, initCnStyles } from "./utils/cn";
+import { cn, initCnStyles } from "../src/utils/cn";
 
 function newButton() {
     return document.createElement("button");
@@ -42,7 +42,7 @@ function imButton(buttonText: string, onClick: () => void) {
     let button;
 
     imDiv(); {
-        button = imEl(newButton); {
+        button = imBeginRoot(newButton); {
             setInnerText(buttonText);
 
             if (elementHasMousePress()) {
@@ -64,12 +64,11 @@ function newInput() {
 
 function Slider(labelText: string, onChange: (val: number) => void) {
     const root = imDiv(); {
-        imEl(newLabel); {
+        imBeginRoot(newLabel); {
             setAttr("for", labelText);
             setInnerText(labelText);
-        };
-        imEnd();
-        const input = imEl<HTMLInputElement>(newInput); {
+        }; imEnd();
+        const input = imBeginRoot<HTMLInputElement>(newInput); {
             if (imInit()) {
                 setAttr("width", "1000px");
                 setAttr("type", "range");
@@ -86,10 +85,8 @@ function Slider(labelText: string, onChange: (val: number) => void) {
                     onChange(input.root.valueAsNumber);
                 }
             }
-        }
-        imEnd();
-    }
-    imEnd();
+        } imEnd();
+    } imEnd();
     return root;
 }
 
@@ -118,16 +115,15 @@ function WallClock() {
     imDiv(); {
         setInnerText("FPS: " + (1 / dt).toPrecision(2) + "");
     } imEnd();
-    imList();
+
     let n = s.val < 0 ? 1 : 2;
-    for (let i = 0; i < n; i++) {
+    imFor(); for (let i = 0; i < n; i++) {
         nextListRoot(); 
 
         imDiv();  {
             setInnerText(new Date().toISOString());
         } imEnd();
-    }
-    imEndList();
+    } imEndFor();
 }
 
 function resize(values: number[][], gridRows: number, gridCols: number) {
@@ -183,7 +179,7 @@ function newAppState() {
 }
 
 function newGridState() {
-    let gridRows = 200;
+    let gridRows = 60;
     let gridCols = 400;
     const values: number[][] = [];
 
@@ -191,7 +187,6 @@ function newGridState() {
 
     return { gridRows, gridCols, values };
 }
-
 
 
 type FpsCounterState = {
@@ -351,8 +346,7 @@ function imApp() {
 
     const s = imState(newAppState);
 
-    const l = imTry();
-    try {
+    const l = imTry(); try {
         if (imIf() && !errRef.val) {
 
             const fps = imState(newFpsCounterState);
@@ -437,8 +431,7 @@ function imApp() {
                     pingPong.pos += pingPong.dir;
                 } 
 
-                imList();
-                for (let i = 0; i <= n; i++) {
+                imFor(); for (let i = 0; i <= n; i++) {
                     nextListRoot();
                     imDiv(); {
                         if (imInit()) {
@@ -452,8 +445,7 @@ function imApp() {
                             setStyle("backgroundColor", present ? "#000" : "#FFF");
                         }
                     } imEnd();
-                }
-                imEndList();
+                } imEndFor();
             } imEnd();
             
             const gridState = imState(newGridState);
@@ -461,8 +453,7 @@ function imApp() {
                 const dt = deltaTimeSeconds();
                 const { values } = gridState;
 
-                imList();
-                for (let i = 0; i < values.length; i++) {
+                imFor(); for (let i = 0; i < values.length; i++) {
                     nextListRoot();
 
                     imDiv(); {
@@ -470,12 +461,11 @@ function imApp() {
                             setAttr("style", "display: flex;");
                         }
 
-                        imList();
-                        for (let j = 0; j < values[i].length; j++) {
+                        imFor(); for (let j = 0; j < values[i].length; j++) {
                             nextListRoot(); 
                             imDiv(); {
                                 if (imInit()) {
-                                    setAttr("style", "display: inline-block; width: 50px; height: 50px; aspect-ratio: 1 / 1; border: 1px solid red;");
+                                    setAttr("style", "display: inline-block; width: 5px; height: 5px; aspect-ratio: 1 / 1; border: 1px solid red;");
                                 }
 
                                 if (elementHasMouseHover()) {
@@ -494,16 +484,14 @@ function imApp() {
                                 }
 
                                 const valRounded = Math.round(val * 255) / 255;
-                                const styleChanged = imMemo(valRounded);
-                                if (styleChanged) {
-                                    setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
-                                } 
+                                // const styleChanged = imMemo(valRounded);
+                                // if (styleChanged) {
+                                //     setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
+                                // } 
                             } imEnd();
-                        }
-                        imEndList();
+                        } imEndFor();
                     } imEnd();
-                }
-                imEndList();
+                } imEndFor();
             } imEndIf();
 
             imDiv(); {
@@ -554,8 +542,7 @@ function imApp() {
 
         console.error(err);
         errRef.val = err;
-    }
-    imEndTryCatch();
+    } imEndTry();
 }
 
 const appRoot = newUiRoot(() => document.body);

@@ -155,7 +155,7 @@ function App(rg: RenderGroup) {
         }
     }
 
-    // TODO: error boundary (I wasnt able to implement it here for years)
+    // TODO: error boundary (I wasnt able to implement it here for the entire year I had this framework)
 
     return div({}, [
         div({}, "Hello world! "),

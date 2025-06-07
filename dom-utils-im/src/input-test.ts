@@ -1,16 +1,16 @@
 import {
     getImKeys as getKeyboardEvents,
     imDiv,
-    imList,
     imEnd,
-    imEndList,
     imInit,
     setStyle,
     getImMouse,
     imTextSpan,
     setAttr,
     nextListRoot,
-    initializeImDomUtils
+    initializeImDomUtils,
+    imFor,
+    imEndFor
 } from "./utils/im-dom-utils";
 
 const currentKeys = new Set<string>();
@@ -31,12 +31,10 @@ function render() {
         currentKeys.clear();
     }
 
-    imList();
-    for (const key of currentKeys) {
+    imFor(); for (const key of currentKeys) {
         nextListRoot();
         imTextSpan(key + ", ")
-    }
-    imEndList();
+    } imEndFor();
 
     imDiv(); {
         const SIZE = 50;
