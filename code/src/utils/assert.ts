@@ -8,15 +8,10 @@
  * a bunch of long error strings in there increasing it's size, and that
  * you only need to put a breakpoint here to respond to the vast majority of failures.
  */
-export function assert(value: unknown): asserts value {
-    if (!value) {
-        throw new Error("Assertion failed");
+export function assert(value: boolean, message: string = "Pop open the debugger to find out why"): asserts value {
+    if (value !== true) {
+        throw new Error("Assertion failed - " + message);
     }
-}
-
-export function hotAssert(value: boolean): asserts value {
-    if (value === true) return;
-    throw new Error("Assertion failed");
 }
 
 export function typeGuard(s: never) {

@@ -1,10 +1,11 @@
+import { initCssbStyles } from "src/utils/cssb";
 import {
-    imDiv,
+    imBeginDiv,
     setInnerText,
     imEnd,
     imState,
     elementHasMousePress,
-    initializeImDomUtils,
+    initImDomUtils,
     imIf,
     imEndIf,
     imBeginRoot,
@@ -44,7 +45,7 @@ function App() {
 
     imBeginRoot(newH3); setInnerText("TODO list"); imEnd();
 
-    imDiv(); {
+    imBeginDiv(); {
         imBeginRoot(newButton); {
             setInnerText("Add");
             if (elementHasMousePress()) {
@@ -55,12 +56,12 @@ function App() {
             }
         } imEnd();
     } imEnd();
-    imDiv(); {
+    imBeginDiv(); {
         imFor(); for (const item of s.todoListItems) {
             // Don't actually need to use item.id as the key here. 
             // re-ordering DOM nodes can be more expensive than just setting new text.
             nextListRoot(item.id); 
-            imDiv(); {
+            imBeginDiv(); {
                 imTextSpan(item.text);
             } imEnd();
         } imEndFor();
@@ -68,4 +69,5 @@ function App() {
 }
 
 
-initializeImDomUtils(App);
+initCssbStyles();
+initImDomUtils(App);

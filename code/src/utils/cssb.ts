@@ -9,7 +9,7 @@ const allClassNames = new Set<string>();
 
 // collect every single style that was created till this point,
 // and append it as a style node.
-export function initCnStyles(stylesRoot?: HTMLElement) {
+export function initCssbStyles(stylesRoot?: HTMLElement) {
     // NOTE: right now, you probably dont want to use document.body as your styles root, if that is also your app root.
     if (!stylesRoot) {
         stylesRoot = document.head;

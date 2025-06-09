@@ -35,12 +35,12 @@ function appState() {
 function App() {
     const state = imState(appState);
 
-    imDiv(); {
+    imBeginDiv(); {
         setInnerText("Count: " + state.count);
     } imEnd();
 
-    imDiv(); {
-        imEl(newButton); {
+    imBeginDiv(); {
+        imBeginRoot(newButton); {
             setInnerText("Increment");
             if (elementHasMousePress()) {
                 state.count++;
@@ -49,7 +49,7 @@ function App() {
     } imEnd();
 
     if (imIf() && state.count > 10) {
-        imDiv(); {
+        imBeginDiv(); {
             setInnerText("Count is super high?!? aint no way bruh? ");
         } imEnd();
     } imEndIf();

@@ -1,6 +1,6 @@
 import {
     getImKeys as getKeyboardEvents,
-    imDiv,
+    imBeginDiv,
     imEnd,
     imInit,
     setStyle,
@@ -8,10 +8,10 @@ import {
     imTextSpan,
     setAttr,
     nextListRoot,
-    initializeImDomUtils,
+    initImDomUtils,
     imFor,
     imEndFor
-} from "../src/utils/im-dom-utils";
+} from "src/utils/im-dom-utils";
 
 const currentKeys = new Set<string>();
 
@@ -36,7 +36,7 @@ function render() {
         imTextSpan(key + ", ")
     } imEndFor();
 
-    imDiv(); {
+    imBeginDiv(); {
         const SIZE = 50;
         if (imInit()) {
             setAttr("style", `position: absolute; width: ${SIZE}px; height: ${SIZE}px; background-color: #000`);
@@ -48,4 +48,4 @@ function render() {
     } imEnd();
 }
 
-initializeImDomUtils(render);
+initImDomUtils(render);

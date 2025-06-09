@@ -1,5 +1,5 @@
 import {
-    imDiv, 
+    imBeginDiv, 
     imState, 
     nextListRoot, 
     newUiRoot,
@@ -13,10 +13,10 @@ import {
     getImMouse,
     deltaTimeSeconds,
     imRef,
-    initializeImDomUtils,
+    initImDomUtils,
     getCurrentRoot,
     imMemo,
-    imSpan,
+    imBeginSpan,
     imTextSpan,
     imStateInline,
     setClass,
@@ -32,7 +32,7 @@ import {
     imEndFor,
     imEndTry,
 } from "src/utils/im-dom-utils";
-import { cn, initCnStyles } from "../src/utils/cn";
+import { cn, initCssbStyles } from "src/utils/cssb";
 
 function newButton() {
     return document.createElement("button");
@@ -41,7 +41,7 @@ function newButton() {
 function imButton(buttonText: string, onClick: () => void) {
     let button;
 
-    imDiv(); {
+    imBeginDiv(); {
         button = imBeginRoot(newButton); {
             setInnerText(buttonText);
 
@@ -63,7 +63,7 @@ function newInput() {
 }
 
 function Slider(labelText: string, onChange: (val: number) => void) {
-    const root = imDiv(); {
+    const root = imBeginDiv(); {
         imBeginRoot(newLabel); {
             setAttr("for", labelText);
             setInnerText(labelText);
@@ -103,16 +103,16 @@ function WallClock() {
     if (s.val < -1) s.val = -1;
 
     // The retained-mode code is actually more compact here!
-    imDiv(); {
-        imDiv(); {
+    imBeginDiv(); {
+        imBeginDiv(); {
             const r = getCurrentRoot();
             setInnerText("Destroyed: " + r.destroyed);
         } imEnd();
     } imEnd();
-    imDiv(); {
+    imBeginDiv(); {
         setInnerText("brownian motion: " + s.val + "");
     } imEnd();
-    imDiv(); {
+    imBeginDiv(); {
         setInnerText("FPS: " + (1 / dt).toPrecision(2) + "");
     } imEnd();
 
@@ -120,7 +120,7 @@ function WallClock() {
     imFor(); for (let i = 0; i < n; i++) {
         nextListRoot(); 
 
-        imDiv();  {
+        imBeginDiv();  {
             setInnerText(new Date().toISOString());
         } imEnd();
     } imEndFor();
@@ -300,7 +300,7 @@ function stopPerfTimer(fps: FpsCounterState) {
 }
 
 function imPerfTimerOutput(fps: FpsCounterState) {
-    imDiv(); {
+    imBeginDiv(); {
         if (imInit()) {
             setStyle("position", "absolute");
             setStyle("top", "5px");
@@ -323,7 +323,7 @@ function imPerfTimerOutput(fps: FpsCounterState) {
 
         imTextSpan(fps.framesMsRounded + "ms frame, ");
 
-        imSpan(); {
+        imBeginSpan(); {
             const fpsChanged = imMemo(fps.renderMsRounded);
             if (fpsChanged) {
                 setStyle("color", fps.renderMsRounded / fps.baselineFrameMs > 0.5 ? "red" : "");
@@ -353,48 +353,48 @@ function imApp() {
             startPerfTimer(fps);
             imPerfTimerOutput(fps);
 
-            imDiv(); {
+            imBeginDiv(); {
                 imButton("Click me!", () => {
                     alert("noo");
                 });
-                imDiv(); {
+                imBeginDiv(); {
                     setInnerText("Hello world! ");
                 }
                 imEnd();
-                imDiv(); {
+                imBeginDiv(); {
                     setInnerText("Lets goo");
                 }
                 imEnd();
-                imDiv(); {
+                imBeginDiv(); {
                     setInnerText("Count: " + s.count);
                 }
                 imEnd();
-                imDiv(); {
+                imBeginDiv(); {
                     setInnerText("Period: " + s.period);
                 }
                 imEnd();
 
                 // sheesh. cant win with these people...
                 if (imIf() && s.count > 1000) {
-                    imDiv(); {
+                    imBeginDiv(); {
                         setInnerText("The count is too damn high!!");
                     } imEnd();
                 } else if (imElseIf() && s.count < 1000) {
-                    imDiv(); {
+                    imBeginDiv(); {
                         setInnerText("The count is too damn low !!");
                     } imEnd();
                 } else { 
                     imElse();
-                    imDiv(); {
+                    imBeginDiv(); {
                         setInnerText("The count is too perfect!!");
                     } imEnd();
                 } imEndIf();
-                imDiv(); {
+                imBeginDiv(); {
                     if (imInit()) {
                         setAttr("style", "height: 5px; background-color: black");
                     }
                 } imEnd();
-                imDiv(); {
+                imBeginDiv(); {
                     if (imInit()) {
                         setAttr("style", "padding: 10px; border: 1px solid black; display: inline-block");
                     }
@@ -412,7 +412,7 @@ function imApp() {
             }
             imEnd();
 
-            imDiv(); {
+            imBeginDiv(); {
                 if (imInit()) {
                     setClass(cn.row);
                     setStyle("height", "4em");
@@ -433,7 +433,7 @@ function imApp() {
 
                 imFor(); for (let i = 0; i <= n; i++) {
                     nextListRoot();
-                    imDiv(); {
+                    imBeginDiv(); {
                         if (imInit()) {
                             setStyle("flex", "1");
                             setStyle("height", "100%");
@@ -456,14 +456,14 @@ function imApp() {
                 imFor(); for (let i = 0; i < values.length; i++) {
                     nextListRoot();
 
-                    imDiv(); {
+                    imBeginDiv(); {
                         if (imInit()) {
                             setAttr("style", "display: flex;");
                         }
 
                         imFor(); for (let j = 0; j < values[i].length; j++) {
                             nextListRoot(); 
-                            imDiv(); {
+                            imBeginDiv(); {
                                 if (imInit()) {
                                     setAttr("style", "display: inline-block; width: 5px; height: 5px; aspect-ratio: 1 / 1; border: 1px solid red;");
                                 }
@@ -494,7 +494,7 @@ function imApp() {
                 } imEndFor();
             } imEndIf();
 
-            imDiv(); {
+            imBeginDiv(); {
                 if (imInit()) {
                     setAttr("style", `position: fixed; bottom: 10px; left: 10px`);
                 }
@@ -511,21 +511,21 @@ function imApp() {
         } else {
             imElse();
 
-            imDiv(); {
+            imBeginDiv(); {
                 if (imInit()) {
                     setAttr("style", `display: absolute;top:0;bottom:0;left:0;right:0;`);
                 }
 
-                imDiv(); {
+                imBeginDiv(); {
                     if (imInit()) {
                         setAttr("style", `display: flex; flex-direction: column; align-items: center; justify-content: center;`);
                     }
 
-                    imDiv(); {
+                    imBeginDiv(); {
                         setInnerText("An error occured: " + errRef.val);
                     }
                     imEnd();
-                    imDiv(); {
+                    imBeginDiv(); {
                         setInnerText("Click below to retry.")
                     }
                     imEnd();
@@ -545,11 +545,9 @@ function imApp() {
     } imEndTry();
 }
 
-const appRoot = newUiRoot(() => document.body);
-
 function rerenderApp() {
     imApp();
 }
 
-initCnStyles();
-initializeImDomUtils(rerenderApp, appRoot);
+initCssbStyles();
+initImDomUtils(rerenderApp);
