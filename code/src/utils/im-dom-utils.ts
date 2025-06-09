@@ -82,7 +82,7 @@ export function scrollIntoViewVH(
     }
 
     if (verticalOffset !== null) {
-        // NOTE: just a copy pate from above
+        // NOTE: just a copy paste from above
         
         const scrollOffset = verticalOffset * scrollParent.offsetHeight;
         const elementHeightOffset = verticalOffset * scrollTo.getBoundingClientRect().height;
@@ -177,20 +177,20 @@ export type ImContext = {
     isRendering: boolean;
     _isExcessEventRender: boolean;
 
-    // debugging
+    globalEventHandlers: {
+        mousedown:  (e: MouseEvent) => void;
+        mousemove:  (e: MouseEvent) => void;
+        mouseenter: (e: MouseEvent) => void;
+        mouseup:    (e: MouseEvent) => void;
+        wheel:      (e: WheelEvent) => void;
+        keydown:    (e: KeyboardEvent) => void;
+        keyup:      (e: KeyboardEvent) => void;
+        blur:       () => void;
+    };
+
+    /** These are used to display performance metrics in the UI. */
     itemsRendered: number;
     itemsRenderedLastFrame: number;
-
-    globalEventHandlers: {
-        mousedown: (e: MouseEvent) => void;
-        mousemove: (e: MouseEvent) => void;
-        mouseenter: (e: MouseEvent) => void;
-        mouseup: (e: MouseEvent) => void;
-        wheel: (e: WheelEvent) => void;
-        keydown: (e: KeyboardEvent) => void;
-        keyup: (e: KeyboardEvent) => void;
-        blur: () => void;
-    };
 };
 
 const ITEM_LIST_RENDERER = 2;
@@ -448,7 +448,7 @@ export function setRenderPoint(p: RenderPoint) {
  *      n++;
  *      for (let i = 0; i < n; i++) {
  *          // As soon as n is incremented, the app will (ideally) throw an Error, complaining about a different number of 
- *          // things being rendered. // TODO: fix the current code, which doesn't care if the number of things keeps growing, and only complains when it shrinks
+ *          // things being rendered.
  *          imDiv(); imEnd{}; 
  *      }
  * }
@@ -499,6 +499,7 @@ export type UIRoot<E extends ValidElement = ValidElement> = {
 
     hasRealChildren: boolean;   // can we add text to this element ?
     destroyed: boolean;         // have we destroyed this element ?
+    completedOneRender: boolean; // have we completed at least one render ?
 
     lastText: string;
 };
@@ -525,6 +526,7 @@ export function newUiRoot<E extends ValidElement>(supplier: (() => E) | null, do
         itemsIdx: -1,
         hasRealChildren: false,
         destroyed: false,
+        completedOneRender: false,
 
         lastText: "",
     }
@@ -553,8 +555,6 @@ function assertNotDerived(r: UIRoot) {
 
 export function setClass(val: string, enabled: boolean | number = true) {
     const r = getCurrentRoot();
-
-    // NOTE: memoization should be done on your end, not mine
 
     if (enabled) {
         r.root.classList.add(val);
@@ -668,9 +668,6 @@ export function addDestructor(r: UIRoot, destructor: () => void) {
     r.destructors.push(destructor);
 }
 
-
-// TODO: keyed list renderer. It will be super useful, for type narrowing with switch statements.
-
 type ValidKey = string | number | Function | object;
 
 export type ListRenderer = {
@@ -745,6 +742,8 @@ export function imBeginList(): ListRenderer {
 
         result = val;
     } else {
+        assertCanPushImmediateModeStateEntry(r);
+
         result = newListRenderer(r);
         items.push(result);
     }
@@ -752,6 +751,13 @@ export function imBeginList(): ListRenderer {
     __beginListRenderer(result);
 
     return result;
+}
+
+function assertCanPushImmediateModeStateEntry(r: UIRoot) {
+    // The same immediate mode state must be queried in the same order every time.
+    // We shouldn't be growing the items array after the first render.
+    assert(r.completedOneRender === false, `You rendered more things in this render than in the previous render. 
+${COND_LIST_RENDERING_HINT} ${INLINE_LAMBDA_BAD_HINT}`);
 }
 
 /**
@@ -990,6 +996,8 @@ However, imStateInline will not catch any out-of-order rendering errors, which m
 
         result = box.v as T;
     } else {
+        assertCanPushImmediateModeStateEntry(r);
+
         // supplier can call getCurrentRoot() internally, and even add destructors.
         // But it shouldn't be doing immediate mode shenanigans.
         disableIm();
@@ -1084,6 +1092,37 @@ function startRendering(root: UIRoot, itemIdx: number, domIdx: number) {
     __beginUiRoot(root, itemIdx, domIdx);
 }
 
+const COND_LIST_RENDERING_HINT =`
+Most likely, you are doing conditional rendering or list rendering in a way that is undetectable to this framework.
+Try following the following patterns instead:
+
+// Conditional rendering
+\`\`\`
+if(imIf() && <condition1>) { 
+    <Component1> 
+} else if (imElseIf() && <condition2>) { 
+    <Component2> 
+} else { 
+    imElse(); 
+    <Component3> 
+} imEndIf()
+\`\`\`
+
+// List rendering
+\`\`\`
+imFor(); for (const item of items) {
+    nextListRoot();
+
+    <Component>
+} imEndFor();
+\`\`\`
+`
+
+const INLINE_LAMBDA_BAD_HINT = `
+This error will also throw if the DOM-element supplier being passed in is an inline lambda. 
+Fix: don't use an inline lambda.
+`;
+
 export function imUnappendedRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
     // Don't access immediate mode state when immediate mode is disabled
     assert(imCtx.imDisabled === false);
@@ -1096,32 +1135,19 @@ export function imUnappendedRoot<E extends ValidElement = ValidElement>(elementS
     if (idx < items.length) {
         result = items[idx] as UIRoot<E>;
 
-        // The same immedaite mode state must be queried in the same order every time.
+        // The same immediate mode state must be queried in the same order every time.
         assert(result.t === ITEM_UI_ROOT);
+    
         // string comparisons end up being quite expensive, so we're storing
         // a reference to the function that created the dom element and comparing those instead.
         assert(
             result.elementSupplier === elementSupplier, 
             `imBeginRoot was invoked with a different supplier from the previous render. 
-Most likely, you are doing conditional rendering in a way that is undetectable to this framework.
-Try following the following pattern instead:
-
-\`\`\`
-if(imIf() && <condition1>) { 
-    <Component1> 
-} else if (imElseIf() && <condition2>) { 
-    <Component2> 
-} else { 
-    imElse(); 
-    <Component3> 
-} imEndIf()
-\`\`\`
-
-This error will also throw if the DOM-element supplier being passed in is an inline labda. 
-Fix: don't use an inline lambda.
-`
+${COND_LIST_RENDERING_HINT} ${INLINE_LAMBDA_BAD_HINT}`
         );
     } else {
+        assertCanPushImmediateModeStateEntry(r);
+
         result = newUiRoot(elementSupplier);
         items.push(result);
     }
@@ -1203,6 +1229,8 @@ function imEndRootInternal(r: UIRoot): boolean {
     }
 
     __popStack();
+
+    r.completedOneRender = true;
 
     return result;
 }
@@ -1404,6 +1432,21 @@ function newMemoState(): { last: unknown } {
  *      setStyle("backgroundColor", getColor(val));
  * }
  * ```
+ *
+ * NOTE: I had previously implemented imBeginMemo() and imEndMemo():
+ * ```
+ * if (imBeginMemo().val(x).objectVals(obj)) {
+ *      <Memoized component>
+ * } imEndMemo();
+ * ```
+ * Looks great right? Ended up with all sorts of stale state bugs so 
+ * I deleted it. 
+ *
+ * What I'm finding now, is that while imMemo is a super common pattern
+ * that you will need in your components, it is really easy to lean on it
+ * in situations where it isn't needed, and end up with a bad architecture.
+ *
+ * In other words, consider centralizing all your state into a single object, and using a setter instead.
  */
 export function imMemo(val: unknown): boolean {
     const ref = imState(newMemoState);
@@ -1472,12 +1515,16 @@ export function setImContext(ctx: ImContext) {
 }
 
 /**
- * Seems like simply doing r.root.onwhatever = () => { blah } destroys performance,
- * so this  method exists now...
- *
- * NOTE: the arguments must never change. Rather than writing code to handle dynamic arguments
- * I will just force you to make it constant. This will simplify both of our code.
- * There is no assert to catch this mistake though, because string comparison asserts tend to be very slow, I've found
+ * Attatch an event handler of your choice to the current UI Root, and 
+ * handle the event directly in the render function without lambdas.
+ * 
+ * This significanlty simplifies the implementation of error boundaries that respond to 
+ * errors in arbitrary events.
+ * 
+ * NOTE: The event type must never change, because the event handler only gets added on the first render.
+ * I have found that adding assertion code and even diffing code here has a significant impact on performance,
+ * so I've chosen to not add it for now. In the future, I may expose the 
+ * event types as integer enums, which should fix this issue. 
  */
 export function imOn<K extends keyof HTMLElementEventMap>(
     type: K
@@ -1857,10 +1904,6 @@ export function getHoveredElement() {
 
 function setClickedElement(ctx: ImContext, el: object | null) {
     const { mouse } = ctx;
-
-    if (ctx !== defaultContext) {
-        console.log(el);
-    }
 
     mouse.clickedElement = el;
     mouse.lastClickedElement = el;

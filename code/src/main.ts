@@ -1,94 +1,25 @@
 import { initCssbStyles } from "src/utils/cssb";
-import { COL, imInitStyles, imBeginLayout, RELATIVE, ROW } from "./design";
-import { imBeginEditableTextArea } from "./components/text-area";
-
-import * as domUtils from "src/utils/im-dom-utils";
-import { cn, newCssBuilder } from "./utils/cssb";
-const {
-    imStateInline,
-    setClass,
-    imSwitch,
-    imEndSwitch,
+import {
     imBeginRoot,
-    imCatch,
     imEnd,
-    imEndFor,
-    imEndIf,
-    imEndTry,
-    imFor,
-    imIf,
-    imElseIf,
     imInit,
-    imMemo,
-    imOn,
-    imRef,
-    imState,
     imTextSpan,
-    imTry,
-    nextListRoot,
-    setAttr,
     initImDomUtils,
-} = domUtils;
-
-const newUl     = () => document.createElement("ul");
-const newLi     = () => document.createElement("li");
-const newH3     = () => document.createElement("h3");
-const newIFrame = () => document.createElement("iframe");
-const newA      = () => document.createElement("a");
-
-function newEditorState(): {
-    text: string;
-    code: () => void;
-    examples: Example[]
-    exampleIdx: number;
-} {
-    return {
-        text: "",
-        code: () => {},
-        examples: [],
-        exampleIdx: 0,
-    };
-}
-
-function imHeading(text: string) {
-    imBeginRoot(newH3); {
-        imInitStyles(`font-weight: bold; font-size: 2rem; text-align: center;`);
-        imTextSpan(text);
-    } imEnd();
-}
-
-type ViewableError = { error: string; stack: string; };
-
-function toViewableError(e: any): ViewableError {
-    let val: ViewableError = {
-        error: "" + e,
-        stack: "",
-    };
-
-    if (e instanceof Error && e.stack) {
-        val.stack = e.stack
-            .split("\n")
-            .filter(line => !line.includes("FrameRequestCallback"))
-            .join("\n");
-    }
-
-    return val;
-}
-
-function recomputeCustomRenderFn(code: string): (() => void) {
-    const exports = {
-        renderFn: () => {},
-    };
-
-    (new Function(`
-const macroSource = "use strict";
-return (domUtils, document, console, exports) => { 
-    const { ${Object.keys(domUtils).join(", ")} } = domUtils; 
-    ${code} 
-};`)())(domUtils, document, console, exports);
-
-    return exports.renderFn;
-}
+    setAttr
+} from "src/utils/im-dom-utils";
+import {
+    COL,
+    imBeginLayout,
+    imHeading,
+    imInitStyles,
+    newA,
+    newLi,
+    newUl,
+    RELATIVE,
+    ROW
+} from "./design";
+import { newCssBuilder } from "./utils/cssb";
+import { imExampleSection } from "./examples-section";
 
 const cssb = newCssBuilder();
 
@@ -154,150 +85,11 @@ When you want full ownership over your entire stack
             } imEnd();
 
             imBeginLayout(); {
-                imInitStyles(`width: 100%;`);
-
-                const s = imState(newEditorState);
-                if (imInit()) {
-                    s.examples.push(...originalExamples);
-                }
-
-                const currentExample = s.examples[s.exampleIdx];
-                const currentExampleChanged = imMemo(currentExample);
-                if (currentExampleChanged) {
-                    s.text = currentExample.code.trim();
-                }
+                imInitStyles(`width: 100%; overflow-y: auto`);
 
                 imHeading("Examples");
 
-                // Tabs
-                imBeginLayout(ROW); {
-                    imInitStyles(`gap: 5px`);
-
-                    imBeginLayout(); {
-                        imInitStyles(`flex: 1`);
-                        imFor(); for (const example of s.examples) {
-                            nextListRoot();
-                            imBeginLayout(); {
-                                imInitStyles(`
-display: inline-block; font-weight: bold; padding: 3px 5px; padding-right: 20px;
-border: 1px solid black; border-bottom: none; border-radius: 4px 4px 0px 0px;
-`);
-                                imTextSpan(example.name);
-                            } imEnd();
-                        } imEndFor();
-                    } imEnd();
-                } imEnd();
-
-                // Content
-                imBeginLayout(); {
-                    imInitStyles(`padding: 10px; border: 1px solid black;`);
-
-                    imBeginLayout(ROW); {
-                        imInitStyles(`gap: 5px`);
-                        imInitStyles(`aspect-ratio: 16 / 6`);
-
-                        imBeginLayout(); {
-                            imInitStyles(`flex: 1`);
-                            imInitStyles(`border: 1px solid black`);
-
-                            const renderState = imStateInline(() => {
-                                return {
-                                    error: null as ViewableError | null,
-                                };
-                            });
-
-                            if (imMemo(s.text)) {
-                                try {
-                                    s.code = recomputeCustomRenderFn(s.text);
-                                    renderState.error = null;
-                                } catch (e) {
-                                    s.code = () => { };
-                                    renderState.error = toViewableError(e);
-                                }
-                            }
-
-                            const l = imTry(); try {
-                                const err = renderState.error;
-                                if (imIf() && !err) {
-                                    // Turns out we _do_ need to render the custom code in it's own context
-                                    // so that we can recover from otherwise fatal errors like a missing call to imEnd().
-
-                                    const customCtxRoot = imBeginLayout(); {
-                                        const customCtxRef = imRef<domUtils.ImContext>();
-                                        if (!customCtxRef.val) {
-                                            // TODO: need a way to de-initialize a context. i.e remove event handlers.
-                                            customCtxRef.val = domUtils.newImContext(customCtxRoot.root)
-                                            domUtils.initImContext(customCtxRef.val);
-
-                                            customCtxRef.val.renderFn = function imEditableComponent() {
-                                                // This 'component' is different every time it's function is recomputed
-                                                imSwitch(s.code);
-                                                s.code();
-                                                imEndSwitch();
-                                            };
-                                        }
-
-                                        const customCtx = customCtxRef.val;
-                                        const currentCtx = domUtils.getImContext();
-
-                                        try {
-                                            // TODO: How would we provide the time in a non-realtime environment?
-                                            // If using React, might need to run this inside framer-motion.
-                                            domUtils.rerenderImContext(customCtx, currentCtx.lastTime, false);
-                                        } catch(e) {
-                                            customCtx.isRendering = false;
-                                            throw e;
-                                        } finally {
-                                            domUtils.setImContext(currentCtx);
-                                        }
-                                    } imEnd();
-                                } else if (imElseIf() && err) {
-                                    imBeginLayout(); {
-                                        imTextSpan("An error occured: " + err.error);
-                                        imBeginLayout(); {
-                                            imInitStyles(`white-space: pre`);
-                                            imTextSpan("" + err.stack);
-                                        } imEnd();
-                                    } imEnd();
-                                } imEndIf();
-                            } catch (e) {
-                                imCatch(l);
-                                renderState.error = toViewableError(e);
-                            } imEndTry();
-                        } imEnd();
-
-                        imBeginLayout(COL); {
-                            imInitStyles(`flex: 1`);
-                            imInitStyles(`border: 1px solid black`);
-                            setClass(cn.overflowYAuto);
-
-                            imBeginLayout(COL); {
-                                if (imInitStyles(`
-                                flex: 1; background-colour: #888; font-family: monospace; font-size: 1rem;
-                                padding: 5px;
-                            `)) {
-                                    setAttr("spellcheck", "false");
-                                }
-
-                                const textAreaRef = imRef<HTMLTextAreaElement>();
-                                imBeginEditableTextArea({
-                                    text: s.text,
-                                    isEditing: true,
-                                    config: {
-                                        useSpacesInsteadOfTabs: true,
-                                        tabStopSize: 4,
-                                    },
-                                    textAreaRef,
-                                }); {
-                                    const eInput = imOn("input");
-                                    if (eInput) {
-                                        s.text = textAreaRef.val!.value;
-                                    }
-                                } imEnd();
-                            } imEnd();
-                        } imEnd();
-                    } imEnd();
-                } imEnd();
+                imExampleSection();
             } imEnd();
 
 
@@ -405,51 +197,6 @@ and it allows us to take advantage of type-narrowing in TypeScript, which is ver
         } imEnd();
     } imEnd();
 }
-
-type Example = {
-    name: string;
-    code: string;
-};
-
-const originalExamples: Example[] = [
-    {
-        name: "README example",
-        code: `
-function newButton() {
-    return document.createElement("button");
-}
-
-function appState() {
-    return { count: 0 };
-}
-
-function App() {
-    const state = imState(appState);
-
-    imBeginDiv(); {
-        setInnerText("Count: " + state.count);
-    } imEnd();
-
-    imBeginDiv(); {
-        imBeginRoot(newButton); {
-            setInnerText("Increment");
-            if (elementHasMousePress()) {
-                state.count++;
-            }
-        } imEnd();
-    } imEnd();
-
-    if (imIf() && state.count > 10) {
-        imBeginDiv(); {
-            setInnerText("Count is super high?!? aint no way bruh? ");
-        } imEnd();
-    } imEndIf();
-}
-
-exports.renderFn = App;
-`
-    },
-];
 
 initCssbStyles();
 initImDomUtils(rerenderApp);
