@@ -1183,6 +1183,9 @@ export function imEnd() {
         __removeAllDomElementsFromUiRoot(r, false);
     }
 
+    // We should render the same number of things every time
+    assert(r.itemsIdx === r.items.length - 1);
+
     return true;
 }
 
@@ -1224,8 +1227,6 @@ function imEndRootInternal(r: UIRoot): boolean {
 
     if (r.itemsIdx === -1) {
         result = true;
-    } else {
-        assert(r.itemsIdx === r.items.length - 1);
     }
 
     __popStack();

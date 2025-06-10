@@ -2,7 +2,6 @@ import {
     imBeginDiv, 
     imState, 
     nextListRoot, 
-    newUiRoot,
     imInit,
     imEnd,
     setInnerText,
@@ -32,7 +31,11 @@ import {
     imEndFor,
     imEndTry,
 } from "src/utils/im-dom-utils";
-import { cn, initCssbStyles } from "src/utils/cssb";
+import {
+    cn,
+    initCssbStyles,
+    newCssBuilder
+} from "src/utils/cssb";
 
 function newButton() {
     return document.createElement("button");
@@ -341,6 +344,14 @@ function imPerfTimerOutput(fps: FpsCounterState) {
     } imEnd();
 }
 
+const cssb = newCssBuilder();
+// border 1px solid red actually induces lag...
+const cnGridTile = cssb.cn("grid-tile", [
+    ` { display: inline-block; width: 100px; height: 100px; aspect-ratio: 1 / 1; 
+        border: 1px solid red; 
+} `
+]);
+
 function imApp() {
     const errRef = imRef<any>();
 
@@ -465,7 +476,7 @@ function imApp() {
                             nextListRoot(); 
                             imBeginDiv(); {
                                 if (imInit()) {
-                                    setAttr("style", "display: inline-block; width: 5px; height: 5px; aspect-ratio: 1 / 1; border: 1px solid red;");
+                                    setClass(cnGridTile);
                                 }
 
                                 if (elementHasMouseHover()) {
