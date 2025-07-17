@@ -1,10 +1,8 @@
 import {
     imBeginDiv, 
     imState, 
-    nextListRoot, 
     imInit,
     imEnd,
-    setInnerText,
     setAttr,
     setStyle,
     elementHasMousePress,
@@ -16,20 +14,22 @@ import {
     getCurrentRoot,
     imMemo,
     imBeginSpan,
-    imTextSpan,
     imStateInline,
     setClass,
     imIf,
     imElseIf,
     imElse,
     imEndIf,
-    getNumItemsRendered,
     imTry,
     imCatch,
     imBeginRoot,
     imFor,
     imEndFor,
     imEndTry,
+    setText,
+    imNextRoot,
+    getImCore,
+    isFirstishRender,
 } from "src/utils/im-dom-utils";
 import {
     cn,
@@ -46,7 +46,7 @@ function imButton(buttonText: string, onClick: () => void) {
 
     imBeginDiv(); {
         button = imBeginRoot(newButton); {
-            setInnerText(buttonText);
+            setText(buttonText);
 
             if (elementHasMousePress()) {
                 onClick();
@@ -69,7 +69,7 @@ function Slider(labelText: string, onChange: (val: number) => void) {
     const root = imBeginDiv(); {
         imBeginRoot(newLabel); {
             setAttr("for", labelText);
-            setInnerText(labelText);
+            setText(labelText);
         }; imEnd();
         const input = imBeginRoot<HTMLInputElement>(newInput); {
             if (imInit()) {
@@ -109,43 +109,29 @@ function WallClock() {
     imBeginDiv(); {
         imBeginDiv(); {
             const r = getCurrentRoot();
-            setInnerText("Destroyed: " + r.destroyed);
+            setText("Removed: " + r.removedLevel);
         } imEnd();
     } imEnd();
     imBeginDiv(); {
-        setInnerText("brownian motion: " + s.val + "");
+        setText("brownian motion: " + s.val + "");
     } imEnd();
     imBeginDiv(); {
-        setInnerText("FPS: " + (1 / dt).toPrecision(2) + "");
+        setText("FPS: " + (1 / dt).toPrecision(2) + "");
     } imEnd();
 
     let n = s.val < 0 ? 1 : 2;
     imFor(); for (let i = 0; i < n; i++) {
-        nextListRoot(); 
+        imNextRoot(); 
 
         imBeginDiv();  {
-            setInnerText(new Date().toISOString());
+            setText(new Date().toISOString());
         } imEnd();
     } imEndFor();
 }
 
-function resize(values: number[][], gridRows: number, gridCols: number) {
-    while (values.length < gridRows) {
-        values.push([]);
-    }
-    while (values.length > gridRows) {
-        values.pop();
-    }
-
-    for (let i = 0; i < values.length; i++) {
-        const row = values[i];
-        while (row.length < gridCols) {
-            row.push(1);
-        }
-        while (row.length > gridCols) {
-            row.pop();
-        }
-    }
+function resize(values: number[], gridRows: number, gridCols: number) {
+    values.length = gridRows * gridCols;
+    values.fill(1);
 }
 
 function newAppState() {
@@ -182,9 +168,9 @@ function newAppState() {
 }
 
 function newGridState() {
-    let gridRows = 60;
-    let gridCols = 400;
-    const values: number[][] = [];
+    let gridRows = 1000;
+    let gridCols = 100;
+    const values: number[] = [];
 
     resize(values, gridRows, gridCols);
 
@@ -322,16 +308,16 @@ function imPerfTimerOutput(fps: FpsCounterState) {
 
         // r.text(screenHz + "hz screen, " + renderHz + "hz code");
 
-        imTextSpan(fps.baselineLocked ? (fps.baselineFrameMs + "ms baseline, ") : "computing baseline...");
+        imBeginSpan(); setText(fps.baselineLocked ? (fps.baselineFrameMs + "ms baseline, ") : "computing baseline..."); imEnd();
 
-        imTextSpan(fps.framesMsRounded + "ms frame, ");
+        imBeginSpan(); setText(fps.framesMsRounded + "ms frame, "); imEnd();
 
         imBeginSpan(); {
             const fpsChanged = imMemo(fps.renderMsRounded);
             if (fpsChanged) {
                 setStyle("color", fps.renderMsRounded / fps.baselineFrameMs > 0.5 ? "red" : "");
             } 
-            setInnerText(fps.renderMsRounded + "ms render");
+            setText(fps.renderMsRounded + "ms render");
         } imEnd();
         // setStyle("transform", "rotate(" + angle + "deg)");
 
@@ -339,7 +325,8 @@ function imPerfTimerOutput(fps: FpsCounterState) {
             fps.baselineFrameMsFreq = 0;
         }
 
-        imTextSpan("Text span: " + getNumItemsRendered());
+        const core = getImCore();
+        imBeginSpan(); setText("Text span: " + core.itemsRenderedLastFrame); imEnd();
 
     } imEnd();
 }
@@ -369,35 +356,35 @@ function imApp() {
                     alert("noo");
                 });
                 imBeginDiv(); {
-                    setInnerText("Hello world! ");
+                    setText("Hello world! ");
                 }
                 imEnd();
                 imBeginDiv(); {
-                    setInnerText("Lets goo");
+                    setText("Lets goo");
                 }
                 imEnd();
                 imBeginDiv(); {
-                    setInnerText("Count: " + s.count);
+                    setText("Count: " + s.count);
                 }
                 imEnd();
                 imBeginDiv(); {
-                    setInnerText("Period: " + s.period);
+                    setText("Period: " + s.period);
                 }
                 imEnd();
 
                 // sheesh. cant win with these people...
                 if (imIf() && s.count > 1000) {
                     imBeginDiv(); {
-                        setInnerText("The count is too damn high!!");
+                        setText("The count is too damn high!!");
                     } imEnd();
                 } else if (imElseIf() && s.count < 1000) {
                     imBeginDiv(); {
-                        setInnerText("The count is too damn low !!");
+                        setText("The count is too damn low !!");
                     } imEnd();
                 } else { 
                     imElse();
                     imBeginDiv(); {
-                        setInnerText("The count is too perfect!!");
+                        setText("The count is too perfect!!");
                     } imEnd();
                 } imEndIf();
                 imBeginDiv(); {
@@ -423,6 +410,7 @@ function imApp() {
             }
             imEnd();
 
+
             imBeginDiv(); {
                 if (imInit()) {
                     setClass(cn.row);
@@ -443,7 +431,7 @@ function imApp() {
                 } 
 
                 imFor(); for (let i = 0; i <= n; i++) {
-                    nextListRoot();
+                    imNextRoot();
                     imBeginDiv(); {
                         if (imInit()) {
                             setStyle("flex", "1");
@@ -462,43 +450,48 @@ function imApp() {
             const gridState = imState(newGridState);
             if (imIf() && s.grid) {
                 const dt = deltaTimeSeconds();
-                const { values } = gridState;
+                const { values, gridRows, gridCols } = gridState;
 
-                imFor(); for (let i = 0; i < values.length; i++) {
-                    nextListRoot();
+                imBeginDiv(); setText("Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
+
+                imFor(); for (let row = 0; row < gridRows; row++) {
+                    imNextRoot();
 
                     imBeginDiv(); {
-                        if (imInit()) {
+                        if (isFirstishRender()) {
                             setAttr("style", "display: flex;");
                         }
 
-                        imFor(); for (let j = 0; j < values[i].length; j++) {
-                            nextListRoot(); 
+                        imFor(); for (let col = 0; col < gridCols; col++) {
+                            imNextRoot(); 
                             imBeginDiv(); {
-                                if (imInit()) {
+                                if (isFirstishRender()) {
                                     setClass(cnGridTile);
                                 }
 
+
+                                const idx = col + gridCols * row;
+
                                 if (elementHasMouseHover()) {
-                                    values[i][j] = 1;
+                                    values[idx] = 1;
                                 }
 
                                 // NOTE: usually you would do this with a CSS transition if you cared about performance, but
                                 // I'm just trying out some random stuff.
-                                let val = values[i][j];
+                                let val = values[idx];
                                 if (val > 0) {
                                     val -= dt;
                                     if (val < 0) {
                                         val = 0;
                                     }
-                                    values[i][j] = val;
+                                    values[idx] = val;
                                 }
 
                                 const valRounded = Math.round(val * 255) / 255;
-                                // const styleChanged = imMemo(valRounded);
-                                // if (styleChanged) {
-                                //     setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
-                                // } 
+                                const styleChanged = imMemo(valRounded);
+                                if (styleChanged) {
+                                    setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
+                                } 
                             } imEnd();
                         } imEndFor();
                     } imEnd();
@@ -533,11 +526,11 @@ function imApp() {
                     }
 
                     imBeginDiv(); {
-                        setInnerText("An error occured: " + errRef.val);
+                        setText("An error occured: " + errRef.val);
                     }
                     imEnd();
                     imBeginDiv(); {
-                        setInnerText("Click below to retry.")
+                        setText("Click below to retry.")
                     }
                     imEnd();
 
