@@ -8,13 +8,12 @@ import {
     elementHasMousePress,
     elementHasMouseHover,
     getImMouse,
-    deltaTimeSeconds,
+    getDeltaTimeSeconds,
     imRef,
     initImDomUtils,
     getCurrentRoot,
     imMemo,
     imBeginSpan,
-    imStateInline,
     setClass,
     imIf,
     imElseIf,
@@ -27,9 +26,9 @@ import {
     imEndFor,
     imEndTry,
     setText,
-    imNextRoot,
+    imNextListRoot,
     getImCore,
-    isFirstishRender,
+    imIsFirstishRender,
 } from "src/utils/im-dom-utils";
 import {
     cn,
@@ -98,7 +97,7 @@ function newWallClockState() {
 }
 
 function WallClock() {
-    const dt = deltaTimeSeconds();
+    const dt = getDeltaTimeSeconds();
     const s = imState(newWallClockState);
 
     s.val += (-0.5 + Math.random()) * 0.02;
@@ -109,7 +108,9 @@ function WallClock() {
     imBeginDiv(); {
         imBeginDiv(); {
             const r = getCurrentRoot();
-            setText("Removed: " + r.removedLevel);
+            setText("Removed: " + r.removeLevel);
+            setText("In conditional path: " + r.isInConditionalPathway);
+            imMemo(1);
         } imEnd();
     } imEnd();
     imBeginDiv(); {
@@ -121,7 +122,7 @@ function WallClock() {
 
     let n = s.val < 0 ? 1 : 2;
     imFor(); for (let i = 0; i < n; i++) {
-        imNextRoot(); 
+        imNextListRoot(); 
 
         imBeginDiv();  {
             setText(new Date().toISOString());
@@ -228,7 +229,7 @@ function newFpsCounterState(): FpsCounterState {
 
 function startPerfTimer(fps: FpsCounterState) {
     fps.t0 = performance.now();
-    const dt = deltaTimeSeconds();
+    const dt = getDeltaTimeSeconds();
     fps.t += dt;
     fps.frames++;
 
@@ -418,9 +419,9 @@ function imApp() {
                 }
 
                 const n = 20;
-                const pingPong = imStateInline(() => {
+                const pingPong = imState(() => {
                     return { pos: 0, dir: 1 };
-                });
+                }, true);
                 if (pingPong.pos === 0) {
                     pingPong.dir = 1;
                 } else if (pingPong.pos === n) {
@@ -431,7 +432,7 @@ function imApp() {
                 } 
 
                 imFor(); for (let i = 0; i <= n; i++) {
-                    imNextRoot();
+                    imNextListRoot();
                     imBeginDiv(); {
                         if (imInit()) {
                             setStyle("flex", "1");
@@ -449,23 +450,23 @@ function imApp() {
             
             const gridState = imState(newGridState);
             if (imIf() && s.grid) {
-                const dt = deltaTimeSeconds();
+                const dt = getDeltaTimeSeconds();
                 const { values, gridRows, gridCols } = gridState;
 
                 imBeginDiv(); setText("Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
 
                 imFor(); for (let row = 0; row < gridRows; row++) {
-                    imNextRoot();
+                    imNextListRoot();
 
                     imBeginDiv(); {
-                        if (isFirstishRender()) {
+                        if (imIsFirstishRender()) {
                             setAttr("style", "display: flex;");
                         }
 
                         imFor(); for (let col = 0; col < gridCols; col++) {
-                            imNextRoot(); 
+                            imNextListRoot(); 
                             imBeginDiv(); {
-                                if (isFirstishRender()) {
+                                if (imIsFirstishRender()) {
                                     setClass(cnGridTile);
                                 }
 
