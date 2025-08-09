@@ -243,16 +243,16 @@ export type ImCore = {
 const ITEM_LIST_RENDERER = 2;
 const ITEM_UI_ROOT = 1;
 const ITEM_STATE = 3;
-const ITEM_MANUAL_STATE = 4;
+const ITEM_MANUAL_STATE = 4; // TODO: delete xD
 
 export const REMOVE_LEVEL_NONE = 1;
-export const REMOVE_LEVEL_DOM = 2;
-export const REMOVE_LEVEL_DESTROY = 3;
+export const REMOVE_LEVEL_DETATCHED = 2;
+export const REMOVE_LEVEL_DESTROYED = 3;
 
 export type RemovedLevel 
     = typeof REMOVE_LEVEL_NONE
-    | typeof REMOVE_LEVEL_DOM   // This is the default remove level. The increase in performance far oughtweighs any memory problems. 
-    | typeof REMOVE_LEVEL_DESTROY;
+    | typeof REMOVE_LEVEL_DETATCHED   // This is the default remove level. The increase in performance far oughtweighs any memory problems. 
+    | typeof REMOVE_LEVEL_DESTROYED;
 
 /** Don't forget to initialize this core with {@link initImDomUtils} */
 export function newImCore(root: HTMLElement = document.body): ImCore {
@@ -515,7 +515,7 @@ export function newUiRoot<E extends ValidElement>(
         lastItemIdx: -1,
         hasRealChildren: false,
 
-        removeLevel: REMOVE_LEVEL_DOM,
+        removeLevel: REMOVE_LEVEL_DETATCHED,
         parentRoot: null,
         isInConditionalPathway: false,
         parentListRenderer: null,
@@ -600,8 +600,8 @@ export function getAttr(k: string, r = getCurrentRoot()) : string {
 // Should only be called in one place, and never called twice on the same root.
 function __onUIRootDestroy(r: UIRoot) {
     // don't re-traverse this bit.
-    if (r.removeLevel < REMOVE_LEVEL_DESTROY) {
-        r.removeLevel = REMOVE_LEVEL_DESTROY;
+    if (r.removeLevel < REMOVE_LEVEL_DESTROYED) {
+        r.removeLevel = REMOVE_LEVEL_DESTROYED;
 
         for (let i = 0; i < r.items.length; i++) {
             const item = r.items[i];
@@ -673,9 +673,9 @@ export function __removeAllDomElementsFromUiRoot(r: UIRoot, removeLevel: Removed
             const item = r.items[i];
             if (item.t === ITEM_UI_ROOT) {
                 item.domAppender.root.remove();
-                if (removeLevel === REMOVE_LEVEL_DOM) {
+                if (removeLevel === REMOVE_LEVEL_DETATCHED) {
                     __onUIRootDomRemove(item);
-                } else if (removeLevel === REMOVE_LEVEL_DESTROY) {
+                } else if (removeLevel === REMOVE_LEVEL_DESTROYED) {
                     __onUIRootDestroy(item);
                 }
             } else if (item.t === ITEM_LIST_RENDERER) {
@@ -721,7 +721,7 @@ export type ListRenderer = {
 
     // TODO: add LRU cache for REMOVE_LEVEL_DOM. Otherwise we'll just infinitely grow in memory usage.
     // While not a problem for us yet, it will be eventually.
-    cacheRemoveLevel: typeof REMOVE_LEVEL_DOM   | typeof REMOVE_LEVEL_DESTROY;
+    cacheRemoveLevel: typeof REMOVE_LEVEL_DETATCHED   | typeof REMOVE_LEVEL_DESTROYED;
 }
 
 function __beginListRenderer(l: ListRenderer) {
@@ -791,7 +791,7 @@ export type RenderFnArgs<A extends unknown[], T extends ValidElement = ValidElem
  * This is why I've added {@link imFor}, {@link imIf}, {@link imSwitch} et al, so I never use 
  * imBeginList directly in practice. But it does help to know how they are all the same think under the hood.
  */
-export function imBeginList(removeLevel: ListRenderer["cacheRemoveLevel"] = REMOVE_LEVEL_DOM): ListRenderer {
+export function imBeginList(removeLevel: ListRenderer["cacheRemoveLevel"] = REMOVE_LEVEL_DETATCHED): ListRenderer {
     const core = imCore;
     const r = getCurrentRoot();
 
@@ -876,7 +876,7 @@ function getNextItemSlotIdx(r: UIRoot, core: ImCore): number {
  * ```
  */
 export function imIf() {
-    imBeginList(REMOVE_LEVEL_DOM);
+    imBeginList(REMOVE_LEVEL_DETATCHED);
     imNextListRoot();
     return true as const;
 }
@@ -905,7 +905,7 @@ export function imIf() {
  * ```
  */
 export function imSwitch(key: ValidKey) {
-    imBeginList(REMOVE_LEVEL_DOM);
+    imBeginList(REMOVE_LEVEL_DETATCHED);
     imNextListRoot(key);
 }
 
@@ -1365,7 +1365,7 @@ export function imBeginRoot<E extends ValidElement = ValidElement>(elementSuppli
  * This method pops any element from the global element stack that we created via {@link imBeginRoot}.
  * This is called `imEnd` instad of `end`, because `end` is a good variable name that we don't want to squat on.
  */
-export function imEnd(removeLevel: RemovedLevel = REMOVE_LEVEL_DOM, r: UIRoot = getCurrentRoot()) {
+export function imEnd(removeLevel: RemovedLevel = REMOVE_LEVEL_DETATCHED, r: UIRoot = getCurrentRoot()) {
     const notDerived = r.elementSupplier !== null;
     if (notDerived) {
         // Defer the mouse events upwards, so that parent elements can handle it if they want
@@ -1462,7 +1462,7 @@ export function imEndList() {
     for (let i = l.builderIdx; i < l.builders.length; i++) {
         __removeAllDomElementsFromUiRoot(l.builders[i], l.cacheRemoveLevel);
     }
-    if (l.cacheRemoveLevel === REMOVE_LEVEL_DESTROY) {
+    if (l.cacheRemoveLevel === REMOVE_LEVEL_DESTROYED) {
         l.builders.length = l.builderIdx;
     }
 
@@ -1470,7 +1470,7 @@ export function imEndList() {
         for (const [k, v] of l.keys) {
             if (v.rendered === false) {
                 __removeAllDomElementsFromUiRoot(v.root, l.cacheRemoveLevel);
-                if (l.cacheRemoveLevel === REMOVE_LEVEL_DESTROY) {
+                if (l.cacheRemoveLevel === REMOVE_LEVEL_DESTROYED) {
                     l.keys.delete(k);
                 }
             }
@@ -1488,7 +1488,7 @@ function newListRenderer(root: UIRoot): ListRenderer {
         builders: [],
         builderIdx: 0,
         current: null,
-        cacheRemoveLevel: REMOVE_LEVEL_DOM,
+        cacheRemoveLevel: REMOVE_LEVEL_DETATCHED,
     };
 }
 
@@ -1533,7 +1533,7 @@ export function abortListAndRewindUiStack(l: ListRenderer) {
 
     const r = l.current;
     if (r !== null) {
-        __removeAllDomElementsFromUiRoot(r, REMOVE_LEVEL_DOM);
+        __removeAllDomElementsFromUiRoot(r, REMOVE_LEVEL_DETATCHED);
 
         // need to reset the dom root, since we've just removed elements underneath it
         r.domAppender.idx = -1;
@@ -2221,35 +2221,4 @@ export function imIsFirstishRender(): boolean {
 // TODO: enum for all styles
 // TODO: enum for all DOM node types
 
-export function imGet<T>(): T | undefined {
-    const r = getCurrentRoot();
 
-    const items = r.items;
-    const idx = getNextItemSlotIdx(r, imCore);
-
-    let result = undefined;
-
-    if (idx < items.length) {
-        const box = items[idx];
-        // The same immediate mode state must be queried in the same order every time.
-        if (box.t !== ITEM_MANUAL_STATE) throw new Error("immediate mode state was queried out of order - wrong box type");
-        result = box.v;
-    } else {
-        items.push({ t: ITEM_MANUAL_STATE, v: undefined });
-    }
-
-    // Good luck
-    return result as T | undefined;
-}
-
-export function imSet<T>(val: T): T {
-    const r = getCurrentRoot();
-    if (r.itemsIdx === -1) throw new Error("Can't call `imSet` without trying to `imGet` first. Fuck me, I knew this should have been an internal API ...");
-
-    const box = r.items[r.itemsIdx];
-    if (box.t !== ITEM_MANUAL_STATE) throw new Error("immediate mode state was queried out of order - wrong box type");
-
-    box.v = val;
-
-    return val;
-}
