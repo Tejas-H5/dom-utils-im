@@ -5,7 +5,7 @@ import {
     imInit,
     initImDomUtils,
 } from "src/utils/im-utils-core";
-import { imTextSpan, setAttr } from "src/utils/im-utils-dom";
+import { setAttr } from "src/utils/im-utils-dom";
 import {
     COL,
     imBeginLayout,

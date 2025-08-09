@@ -21,7 +21,7 @@ import {
     imMemo,
     imOn,
     imRef,
-    imState,
+    imGetState,
     imTextSpan,
     imTry,
     nextListRoot,
@@ -219,7 +219,7 @@ const cnTabContainer = cssb.cn("tab-container", [
 
 
 export function imExampleSection() {
-    const s = imState(newExamplesSectionState);
+    const s = imGetState(newExamplesSectionState);
     if (imInit()) {
         s.examples.push(...originalExamples);
     }

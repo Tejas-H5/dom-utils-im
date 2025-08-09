@@ -23,12 +23,14 @@
  * - prefer using if (x === true) instead of if (x). This appears to be better in performance.
  *
  * TODO:
- * - Use typeId + state
+ * - [...] Use typeId + state
+ * - remove too much immediate mode state was being pushed check
  * - Decouple framework from DOM
  * - Far less yapping
  */
 
 // Purely for debug
+import { assert } from "./assert";
 import { newCssBuilder } from "./cssb";
 
 // TODO: remove/invert dependency
@@ -79,9 +81,9 @@ export type ValidElement = HTMLElement | SVGElement;
 export type UIRootItem = UIRoot | ListRenderer | StateItem;
 
 // Not defining them this early causes lexical whatever javascript errors
+const ITEM_UI_ROOT       = 1;
 const ITEM_LIST_RENDERER = 2;
-const ITEM_UI_ROOT = 1;
-const ITEM_STATE = 3;
+const ITEM_STATE         = 3;
 
 export const REMOVE_LEVEL_NONE = 1;
 export const REMOVE_LEVEL_DETATCHED = 2;
@@ -91,6 +93,40 @@ export type RemovedLevel
     = typeof REMOVE_LEVEL_NONE
     | typeof REMOVE_LEVEL_DETATCHED   // This is the default remove level. The increase in performance far oughtweighs any memory problems. 
     | typeof REMOVE_LEVEL_DESTROYED;
+
+// The T here is purely used as a TypeScript compiler construct, and isn't used in the actual code.
+export type TypeId<T> = number & { TypeId: void; };
+
+/** 
+ * NOTE: some atypical usecases require multiple cores,
+ * so make sure that your event handlers capture the one that is current
+ * _at the time of adding the event_.
+ *
+ * Wrong:
+ * ```ts
+ * resizeObserver.onResize(() => rerenderCore(imCore));
+ * ```
+ *
+ * Right:
+ * ```ts
+ * const core = imCore;
+ * resizeObserver.onResize(() => rerenderCore(core));
+ * ```
+ */
+const defaultCore = newImCore();
+
+// Contains ALL the state. In an atypical usecase, there may be multiple cores that must switch between each other.
+let imCore = defaultCore;
+
+// actually shouldn't be in imCore
+let typeIdCounter = 1 as TypeId<any>;
+let canCreateMoreTypes = true;
+export function nextTypeId<T>(): TypeId<T> {
+    if (!canCreateMoreTypes) throw new Error("Can't create more types after you've initialized the framework :)");
+    return typeIdCounter++ as TypeId<T>;
+}
+
+export const TYPEID_INLINE = 0 as TypeId<undefined>;
 
 /** Don't forget to initialize this core with {@link initImDomUtils} */
 export function newImCore(root: HTMLElement = document.body): ImCore {
@@ -133,26 +169,6 @@ export function newImCore(root: HTMLElement = document.body): ImCore {
     return core;
 }
 
-/** 
- * NOTE: some atypical usecases require multiple cores,
- * so make sure that your event handlers capture the one that is current
- * _at the time of adding the event_.
- *
- * Wrong:
- * ```ts
- * resizeObserver.onResize(() => rerenderCore(imCore));
- * ```
- *
- * Right:
- * ```ts
- * const core = imCore;
- * resizeObserver.onResize(() => rerenderCore(core));
- * ```
- */
-const defaultCore = newImCore();
-
-// Contains ALL the state. In an atypical usecase, there may be multiple cores that must switch between each other.
-let imCore = defaultCore;
 
 
 /** 
@@ -183,7 +199,7 @@ export type UIRoot<E extends ValidElement = ValidElement> = {
     readonly items: UIRootItem[];
 
     itemsIdx: number;
-    lastItemIdx: number;
+    lastItemIdx: number; // TODO: delete. wtf is this even?
 
     hasRealChildren:    boolean; // can we add text to this element ?
     completedOneRender: boolean; // have we completed at least one render without erroring?
@@ -227,8 +243,8 @@ export type ListRenderer = {
 // TODO: use TypeIds
 export type StateItem<T = unknown>  = {
     t: typeof ITEM_STATE;
-    v: T;
-    supplier: () => unknown;
+    typeId: TypeId<T>;
+    v: T | undefined;
 };
 
 export type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot<T>) => void;
@@ -475,8 +491,6 @@ export function imBeginList(removeLevel: ListRenderer["cacheRemoveLevel"] = REMO
 
         result = box;
     } else {
-        if (r.lastItemIdx !== -1) throw new Error("too much immediate mode state was being pushed");
-
         result = newListRenderer(r);
         items.push(result);
         core.numCacheMisses++;
@@ -799,66 +813,66 @@ export type DeferredAction = (() => void) | undefined;
 ///////// 
 // Common immediate mode UI helpers
 
-/**
- * This method returns a stable reference to some state, allowing your component to maintain
- * state between rerenders. This only works because of the 'rules of immediate mode state' idea
- * this framework is built upon, which are basically the same as the 'rule of hooks' from React,
- * except it extends to all immediate mode state that we want to persist and reuse between rerenders, 
- * including ui components.
- *
- * This method expects that you pass in the same supplier every time.
- * This catches out-of-order immediate-state rendering bugs, so it's better to use this where possible. 
- *
- * Sometimes, it is just way easier to do the state inline:
- * ```
- *      const s = getState(r, () => { ... some state } );
- * ```
- *
- * In which chase, you'll set {@link inline} to true. This can be a bad idea -
- * you will be less likely to catch out-of-order rendering bugs that can corrupt your state.
- *
- * // TODO: delete this in favour of typeID + refs
- */
-export function imState<T>(supplier: () => T, inline: boolean = false, r = getCurrentRoot()): T {
-    return imStateInternal(supplier, inline, r).v;
-}
+export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
+    const r = getCurrentRoot();
 
-function imStateInternal<T>(supplier: () => T, inline: boolean, r: UIRoot = getCurrentRoot()): StateItem<T> {
-    const core = imCore;
     const items = r.items;
-    const idx = getNextItemSlotIdx(r, core);
+    const idx = getNextItemSlotIdx(r, imCore);
 
     let result: StateItem<T>;
     if (idx < items.length) {
         const box = r.items[idx];
-        if (box.t !== ITEM_STATE) throw new Error("immediate mode state was queried out of order - wrong box type");
-
-        // imState recieved a different supplier this render. If you're passing an inline lambda to this method, then use imStateInline to skip this check.
-        // NOTE: However, this assertion exists to catch out-of-order rendering errors, which will lead to state corruption from 
-        // hooks reading from and writing to the wrong object. The assertion won't be there in imStateInline.
-        if (inline === false) {
-            if (supplier !== box.supplier) throw new Error("immediate mode state was queried out of order - wrong supplier");
-        }
-
+        if (box.t !== ITEM_STATE)  throw new Error("immediate mode state was queried out of order - wrong box type");
+        if (box.typeId !== typeId) throw new Error("immediate mode state was queried out of order - wrong state type");
         result = box as StateItem<T>;
     } else {
-        if (r.lastItemIdx !== -1) throw new Error("too much immediate mode state was being pushed");
-
-        // supplier can call getCurrentRoot() internally, and even add destructors.
-        // But it shouldn't be doing immediate mode shenanigans.
-        disableIm();
-        const v = supplier();
-        enableIm();
-
-        result = { t: ITEM_STATE, v, supplier };
+        result = { t: ITEM_STATE, typeId, v: undefined };
         items.push(result);
-
-        core.numCacheMisses++;
+        imCore.numCacheMisses++;
     }
 
-    core.itemsRendered++;
+    imCore.itemsRendered++;
 
     return result;
+}
+
+/**
+ * This method returns a stable reference to some state, allowing your component to maintain
+ * state between rerenders. 
+ * At the start, you can just use {@link TYPEID_INLINE} to get something working
+ * without having to declare a type and instantiate it:
+ *
+ * ```ts
+ * // We want typescript to infer the state from what is passed into imSetState,
+ * // so we can't just do `let appState = imGetState(TYPEID_INLINE);` (at least, this is true when I wrote this comment)
+ * let appState; appState = imGetState(TYPEID_INLINE);
+ * if (appState === undefined) {
+ *      appState = { ... };
+ *  }
+ *
+ * // we can just use appState here
+ * ```
+ *
+ * Eventually, this can be factored out as needed:
+ *
+ * ```ts
+ * function imGetAppState(): AppState {
+ *      // TypeScript can can now just infer the type off the ID value
+ *      let appState = imGetState(AppStateTypeId);
+ *      if (appState === undefined) appState = imSetState(newAppState());
+ * }
+ * const AppStateTypeId = nextTypeId<AppState>();
+ * ```
+ */
+export function imGetState<T>(typeId: TypeId<T>): T | undefined {
+    return imGetStateRef(typeId).v;
+}
+
+export function imSetState<T>(val: T): T {
+    const r = getCurrentRoot();
+    const item = r.items[r.itemsIdx]; 
+    assert(item.t === ITEM_STATE); item.v = val;
+    return val;
 }
 
 /**
@@ -920,8 +934,6 @@ export function imUnappendedRoot<E extends ValidElement = ValidElement>(
         // a reference to the function that created the dom element and comparing those instead.
         if (result.elementSupplier !== elementSupplier) throw new Error("immediate mode state was queried out of order - element suppliers don't match");
     } else {
-        if (r.lastItemIdx !== -1) throw new Error("too much immediate mode state was being pushed");
-
         result = newUiRoot(elementSupplier);
         items.push(result);
     }
@@ -1064,80 +1076,6 @@ export function abortListAndRewindUiStack(l: ListRenderer) {
     }
 }
 
-export type Ref<T> = { val: T | null; }
-function newRef<T>(): Ref<T> {
-    return { val: null };
-}
-
-/**
- * Set the state later in the function:
- * ```ts
- * const ref = imRef<HTMLDivElement>();
- *
- * ref.current = div().root; {
- *      text("The div: " + ref.val);
- * } end();
- * ```
- *
- * NOTE: Prefer {@link imState}, since you will catch out-of-order rendering bugs that way
- */
-export function imRef<T>(): Ref<T> {
-    return imState(newRef<T>);
-}
-
-export function setRef<T>(ref: Ref<T>, val: T): T {
-    ref.val = val;
-    return val;
-}
-
-// These are mainly for quick prototyping or simple logic.
-// You're better off using your own objects in 99% of scenarios.
-
-function newArray() {
-    return [];
-}
-
-export function imArray<T>(): T[] {
-    return imState(newArray);
-}
-
-export function newBoolean() {
-    return { val: false };
-}
-
-export function newNumber() {
-    return { val: 0 };
-}
-
-export function newString() {
-    return { val: "" };
-}
-
-function newMap<K, V>() {
-    return new Map<K, V>();
-}
-
-export function imNewMap<K, V>(): Map<K, V> {
-    return imState(newMap<K, V>);
-}
-
-
-function newSet<T>() {
-    return new Set<T>();
-}
-
-export function imNewSet<K>(): Set<K> {
-    return imState(newSet<K>);
-}
-
-
-const MEMO_INITIAL_VALUE = {};
-function newMemoState(): { last: unknown } {
-    // this way, imMemo always returns true on the first render
-    return { last: MEMO_INITIAL_VALUE };
-}
-
-
 /**
  * Returns a non-zero value if it was different to the previous value.
  * ```ts
@@ -1178,19 +1116,22 @@ function newMemoState(): { last: unknown } {
 // have deleted them.
 export function imMemo(val: unknown): ImMemoResult {
     const r = getCurrentRoot();
-    const ref = imState(newMemoState, false, r);
-
     let result: ImMemoResult = MEMO_NOT_CHANGED;
 
-    if (ref.last !== val) {
-        result = ref.last === MEMO_INITIAL_VALUE ? MEMO_FIRST_RENDER : MEMO_CHANGED;
-        ref.last = val;
-    } else if (r.startedConditionallyRendering === true) {
-        result = MEMO_FIRST_RENDER_CONDITIONAL;
+    let lastVal = imGetState(TYPEID_ImMemoState); {
+        if (lastVal === undefined) lastVal = imSetState(MEMO_INITIAL_VALUE); // this way, imMemo always returns true on the first render
+        if (lastVal !== val) {
+            result = lastVal === MEMO_INITIAL_VALUE ? MEMO_FIRST_RENDER : MEMO_CHANGED;
+            imSetState(MEMO_INITIAL_VALUE)
+        } else if (r.startedConditionallyRendering === true) {
+            result = MEMO_FIRST_RENDER_CONDITIONAL;
+        }
     }
 
     return result;
 }
+const TYPEID_ImMemoState = nextTypeId<unknown>();
+const MEMO_INITIAL_VALUE = {};
 
 export const MEMO_NOT_CHANGED  = 0;
 /** returned by {@link imMemo} if the value changed */
@@ -1231,17 +1172,15 @@ export function setImCore(core: ImCore) {
 
 /**
  * Returns true the first time it's called, and false every other time.
+ * If you're using another sate ref, you probably don't even need this.
  */
 export function imInit(): boolean {
-    const val = imRef<boolean>();
-    if (val.val === null) {
-        val.val = true;
+    let result = imGetState(TYPEID_ImInit) === undefined;
+    if (result === true) imSetState(true);
 
-        return true;
-    }
-
-    return false;
+    return result;
 }
+const TYPEID_ImInit = nextTypeId<boolean>();
 
 export function getDeltaTimeSeconds(): number {
     return imCore.dtSeconds;
@@ -1311,6 +1250,7 @@ export function uninitImCore(core: ImCore) {
  * Take a look inside if you need something more custom.
  */
 export function initImDomUtils(renderFn: () => void): ImCore {
+    canCreateMoreTypes = false;
     initImCore(defaultCore);
     startAnimationLoop(defaultCore, renderFn);
     return defaultCore;

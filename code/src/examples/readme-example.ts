@@ -3,7 +3,7 @@ import {
     imBeginDiv,
     setInnerText,
     imEnd,
-    imState,
+    imGetState,
     elementHasMousePress,
     initImDomUtils,
     imIf,
@@ -41,7 +41,7 @@ function appState(): {
 }
 
 function App() {
-    const s = imState(appState);
+    const s = imGetState(appState);
 
     imBeginRoot(newH3); setInnerText("TODO list"); imEnd();
 

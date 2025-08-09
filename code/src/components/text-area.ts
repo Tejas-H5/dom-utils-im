@@ -3,7 +3,7 @@ import {
     imBeginDiv,
     imBeginRoot,
     imEnd,
-    imState,
+    imGetState,
     imInit,
     Ref,
     setClass,
@@ -74,7 +74,7 @@ export function imBeginEditableTextArea({
     config,
     textAreaRef,
 }: EditableTextAreaArgs) {
-    const state = imState(newEditableTextAreaState);
+    const state = imGetState(newEditableTextAreaState);
 
     const wasEditing = state.isEditing;
     state.isEditing = isEditing;

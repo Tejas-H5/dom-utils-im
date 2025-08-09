@@ -1,9 +1,8 @@
 import {
-    imState, 
+    imGetState, 
     imInit,
     imEnd,
     getDeltaTimeSeconds,
-    imRef,
     initImDomUtils,
     getCurrentRoot,
     imMemo,
@@ -20,6 +19,8 @@ import {
     imNextListRoot,
     getImCore,
     imIsFirstishRender,
+    nextTypeId,
+    inlineTypeId,
 } from "src/utils/im-utils-core";
 import {
     setText,
@@ -100,11 +101,13 @@ function newWallClockState() {
 
 function WallClock() {
     const dt = getDeltaTimeSeconds();
-    const s = imState(newWallClockState);
 
-    s.val += (-0.5 + Math.random()) * 0.02;
-    if (s.val > 1) s.val = 1;
-    if (s.val < -1) s.val = -1;
+    const s = imGetState<number>(inlineTypeId(5699140285007203));
+    if (s.v === undefined) s.v = 0;
+
+    s.v += (-0.5 + Math.random()) * 0.02;
+    if (s.v > 1) s.v = 1;
+    if (s.v < -1) s.v = -1;
 
     // The retained-mode code is actually more compact here!
     imBeginDiv(); {
@@ -116,13 +119,13 @@ function WallClock() {
         } imEnd();
     } imEnd();
     imBeginDiv(); {
-        setText("brownian motion: " + s.val + "");
+        setText("brownian motion: " + s.v + "");
     } imEnd();
     imBeginDiv(); {
         setText("FPS: " + (1 / dt).toPrecision(2) + "");
     } imEnd();
 
-    let n = s.val < 0 ? 1 : 2;
+    let n = s.v < 0 ? 1 : 2;
     imFor(); for (let i = 0; i < n; i++) {
         imNextListRoot(); 
 
@@ -343,14 +346,15 @@ const cnGridTile = cssb.cn("grid-tile", [
 ]);
 
 function imApp() {
-    const errRef = imRef<any>();
+    const errRef = imGetState<any>(__line__);
 
-    const s = imState(newAppState);
+    // If only we can do this withouta typeId or a fn pointer?
+    const s = imGetState(newAppState);
 
     const l = imTry(); try {
         if (imIf() && !errRef.val) {
 
-            const fps = imState(newFpsCounterState);
+            const fps = imGetState(newFpsCounterState);
             startPerfTimer(fps);
             imPerfTimerOutput(fps);
 
@@ -421,7 +425,7 @@ function imApp() {
                 }
 
                 const n = 20;
-                const pingPong = imState(() => {
+                const pingPong = imGetState(() => {
                     return { pos: 0, dir: 1 };
                 }, true);
                 if (pingPong.pos === 0) {
@@ -450,7 +454,7 @@ function imApp() {
                 } imEndFor();
             } imEnd();
             
-            const gridState = imState(newGridState);
+            const gridState = imGetState(newGridState);
             if (imIf() && s.grid) {
                 const dt = getDeltaTimeSeconds();
                 const { values, gridRows, gridCols } = gridState;

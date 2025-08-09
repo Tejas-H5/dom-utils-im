@@ -5,8 +5,8 @@ import {
     imBeginRoot,
     ImCore,
     imInit,
-    imRef,
-    imState,
+    imGetState,
+    nextTypeId,
     rerenderImCore,
     UIRoot,
     ValidElement
@@ -413,32 +413,36 @@ export function getAttr(k: string, r = getCurrentRoot()) : string {
     return r.root.getAttribute(k) || "";
 }
 
-function newIsOnScreenState() {
-    const r = getCurrentRoot();
-    const self = {
-        isOnScreen: false,
-        observer: new IntersectionObserver((entries) => {
-            for (const entry of entries) {
-                self.isOnScreen = entry.isIntersecting;
-            }
-        })
-    };
-
-    const core = getImCore();
-    self.observer.observe(r.root);
-    core.numIntersectionObservers++;
-    addDestructor(r, () => {
-        core.numIntersectionObservers--;
-        self.observer.disconnect()
-    });
-
-    return self;
-}
-
 export function imIsOnScreen() {
-    const isOnScreenRef = imState(newIsOnScreenState);
-    return isOnScreenRef.isOnScreen;
+    const isOnScreenRef = imGetState(TYPEID_imIsOnScreen);
+    if (isOnScreenRef.v === undefined) {
+        const r = getCurrentRoot();
+
+        const self = {
+            isOnScreen: false,
+            observer: new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    self.isOnScreen = entry.isIntersecting;
+                }
+            })
+        };
+
+        const core = getImCore();
+
+        self.observer.observe(r.root);
+        core.numIntersectionObservers++;
+
+        addDestructor(r, () => {
+            core.numIntersectionObservers--;
+            self.observer.disconnect()
+        });
+
+        isOnScreenRef.v = self;
+    }
+
+    return isOnScreenRef.v.isOnScreen;
 }
+const TYPEID_imIsOnScreen = nextTypeId<{ isOnScreen: boolean; observer: IntersectionObserver; }>();
 
 
 export function addClasses(classes: string[]) {
@@ -461,41 +465,40 @@ export function setStyle<K extends (keyof ValidElement["style"])>(key: K, value:
 // Realtime immediate-mode events API
 
 
-function newImGetSizeState(): {
-    size: SizeState;
-    observer: ResizeObserver;
-    resized: boolean;
-} {
-    const r = getCurrentRoot();
-    const core = getImCore();
+const TYPEID_ImTrackSize = nextTypeId<{ width: number; height: number; resized: boolean; observer: ResizeObserver; }>();
+export function imTrackSize() {
+    const ref = imGetState(TYPEID_ImTrackSize);
+    if (ref.v === undefined) {
+        const r = getCurrentRoot();
+        const core = getImCore();
 
-    const self = {
-        size: { width: 0, height: 0, },
-        resized: false,
-        observer: new ResizeObserver((entries) => {
-            for (const entry of entries) {
-                // NOTE: resize-observer cannot track the top, right, left, bottom of a rect. Sad.
-                self.size.width = entry.contentRect.width;
-                self.size.height = entry.contentRect.height;
-                break;
-            }
+        const self = {
+            width: 0,
+            height: 0,
+            resized: false,
+            observer: new ResizeObserver((entries) => {
+                for (const entry of entries) {
+                    // NOTE: resize-observer cannot track the top, right, left, bottom of a rect. Sad.
+                    self.width = entry.contentRect.width;
+                    self.height = entry.contentRect.height;
+                    break;
+                }
 
-            rerenderImCore(core, core.lastTime, false);
-        })
+                rerenderImCore(core, core.lastTime, false);
+            })
+        };
+
+        self.observer.observe(r.root);
+        core.numResizeObservers++;
+        addDestructor(r, () => {
+            core.numResizeObservers--;
+            self.observer.disconnect()
+        });
+
+        ref.v = self;
     };
 
-    self.observer.observe(r.root);
-    core.numResizeObservers++;
-    addDestructor(r, () => {
-        core.numResizeObservers--;
-        self.observer.disconnect()
-    });
-
     return self;
-}
-
-export function imTrackSize() {
-    return imState(newImGetSizeState);
 }
 
 export function createSvgElement<E extends SVGElement>(type: string): E {
@@ -543,13 +546,13 @@ export function elementHasMousePress(r = getCurrentRoot()) {
 }
 
 export function elementHasMouseDown(
-    mouse: ImMouseState,
     // Do we care that this element was initially clicked?
     // Set to false if you want to detect when an element drags their mouse over this element but 
     // it didn't initiate the click from this element.
     hadClick = true
 ) {
     const r = getCurrentRoot();
+    const mouse = getImMouse();
 
     if (hadClick === true) {
         return r.root === mouse.lastClickedElement;
@@ -558,7 +561,7 @@ export function elementHasMouseDown(
     return mouse.leftMouseButton && elementHasMouseHover(mouse);
 }
 
-export function elementHasMouseHover(mouse: ImMouseState) {
+export function elementHasMouseHover(mouse: ImMouseState = getImMouse()) {
     const r = getCurrentRoot();
     return r.root === mouse.hoverElement;
 }
@@ -573,14 +576,6 @@ export function setClickedElement(mouse: ImMouseState, el: object | null) {
     mouse.lastClickedElementOriginal = el;
 }
 
-function newPreventScrollEventPropagationState() {
-    return { 
-        isBlocking: true,
-        scrollY: 0,
-    };
-}
-
-
 /**
  * Attatch an event handler of your choice to the current UI Root, and 
  * handle the event directly in the render function without lambdas.
@@ -594,14 +589,14 @@ function newPreventScrollEventPropagationState() {
  * event types as integer enums, which should fix this issue. 
  */
 export function imOn<K extends keyof HTMLElementEventMap>(type: K): HTMLElementEventMap[K] | null {
-    const eventRef = imRef<HTMLElementEventMap[K]>();
+    const eventRef = imGetState<HTMLElementEventMap[K]>(TYPEID_imOn);
     const core = getImCore();
 
     if (imInit() === true) {
         const r = getCurrentRoot();
 
         const handler = (e: HTMLElementEventMap[K]) => {
-            eventRef.val = e;
+            eventRef.v = e;
             rerenderImCore(core, core.lastTime, true);
         }
         r.root.addEventListener(
@@ -623,39 +618,50 @@ export function imOn<K extends keyof HTMLElementEventMap>(type: K): HTMLElementE
         });
     }
 
-    if (eventRef.val === null) return null;
+    let result: HTMLElementEventMap[K] | null =  null;
 
-    const ev = eventRef.val;
-    eventRef.val = null;
-    return ev;
+    if (eventRef.v !== undefined) {
+        result = eventRef.v;
+        eventRef.v = undefined;
+    }
+
+    return result;
 }
-
-
+const TYPEID_imOn = nextTypeId();
 export function imPreventScrollEventPropagation(mouse: ImMouseState) {
-    const state = imState(newPreventScrollEventPropagationState);
+    const ref = imGetState(TYPEID_imPreventScrollEventPropagation);
+    if (ref.v === undefined) {
+        const state = { isBlocking: true, scrollY: 0 };
+        ref.v = state;
 
-    if (imInit() === true) {
         const r = getCurrentRoot();
+
+        // TODO: consider bubbling all events in a global manner
+
         const handler = (e: Event) => {
             if (state.isBlocking === true) {
                 e.preventDefault();
             }
         }
+
         r.root.addEventListener("wheel", handler);
-        addDestructor(r, () => {
-            r.root.removeEventListener("wheel", handler);
-        });
+        addDestructor(r, () => r.root.removeEventListener("wheel", handler))
     }
 
-    if (state.isBlocking === true && elementHasMouseHover(mouse) && mouse.scrollWheel !== 0) {
-        state.scrollY += mouse.scrollWheel;
+    if (
+        ref.v.isBlocking === true && 
+        elementHasMouseHover(mouse) && 
+        mouse.scrollWheel !== 0
+    ) {
+        ref.v.scrollY += mouse.scrollWheel;
         mouse.scrollWheel = 0;
     } else {
-        state.scrollY = 0;
+        ref.v.scrollY = 0;
     }
 
-    return state;
+    return ref;
 }
+const TYPEID_imPreventScrollEventPropagation = nextTypeId<{ isBlocking: boolean, scrollY: number; }>();
 
 
 export function resetKeyboardState(keyboard: ImKeyboardState) {
