@@ -4,9 +4,9 @@ import {
     imInit,
     setAttr,
     setClass
-} from "src/utils/im-dom-utils";
+} from "src/utils/im-utils-core";
 import { cn } from "./utils/cssb";
-import { imBeginRoot, imEnd, imTextSpan } from "./utils/im-dom-utils";
+import { imBeginRoot, imEnd, imTextSpan } from "./utils/im-utils-core";
 
 export const ROW = 1 << 0;
 export const COL = 1 << 1;

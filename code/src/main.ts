@@ -3,10 +3,9 @@ import {
     imBeginRoot,
     imEnd,
     imInit,
-    imTextSpan,
     initImDomUtils,
-    setAttr
-} from "src/utils/im-dom-utils";
+} from "src/utils/im-utils-core";
+import { imTextSpan, setAttr } from "src/utils/im-utils-dom";
 import {
     COL,
     imBeginLayout,

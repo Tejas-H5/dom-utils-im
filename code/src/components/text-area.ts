@@ -14,7 +14,7 @@ import {
     imIf,
     imEndIf,
     imOn
-} from "src/utils/im-dom-utils";
+} from "src/utils/im-utils-core";
 import { getLineBeforePos } from "src/utils/text-utils";
 
 const CSSVARS_FOCUS = "#CCC";

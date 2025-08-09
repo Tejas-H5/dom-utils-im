@@ -13,7 +13,7 @@ import {
     imEndFor,
     nextListRoot,
     imTextSpan,
-} from "src/utils/im-dom-utils";
+} from "src/utils/im-utils-core";
 
 function newButton() {
     return document.createElement("button");

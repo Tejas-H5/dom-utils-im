@@ -2,7 +2,7 @@ import { imBeginEditableTextArea } from "./components/text-area";
 import { COL, imBeginLayout, imInitStyles, ROW, toViewableError, ViewableError } from "./design";
 import { cn, newCssBuilder } from "./utils/cssb";
 
-import * as domUtils from "src/utils/im-dom-utils";
+import * as domUtils from "src/utils/im-utils-core";
 import {
     elementHasMousePress,
     imStateInline,
@@ -26,7 +26,7 @@ import {
     imTry,
     nextListRoot,
     setAttr,
-} from "src/utils/im-dom-utils"
+} from "src/utils/im-utils-core"
 
 
 function recomputeCustomRenderFn(code: string): (() => void) {

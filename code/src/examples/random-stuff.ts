@@ -20,7 +20,7 @@ import {
     imNextListRoot,
     getImCore,
     imIsFirstishRender,
-} from "src/utils/im-dom-utils";
+} from "src/utils/im-utils-core";
 import {
     setText,
     setClass,

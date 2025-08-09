@@ -32,8 +32,9 @@
 import { newCssBuilder } from "./cssb";
 
 // TODO: remove/invert dependency
-import { appendToDomRoot, DomAppender, ImKeyboardState, ImMouseState, resetKeyboardState, resetMouseState, setClass, setClickedElement } from "./im-utils-dom";
-function hasDomDependency() { /** This code as a dependency on DOM */ };
+import { addDocumentAndWindowEventListeners, appendToDomRoot, beginProcessingImEvent, bubbleMouseEvents, DomAppender, endProcessingImEvent, ImGlobalEventSystem, newImGlobalEventSystem, removeDocumentAndWindowEventListeners, setClass } from "./im-utils-dom";
+
+export function hasDomDependency() { /** This code as a dependency on DOM */ };
 
 function renderStub() {}
 
@@ -52,9 +53,6 @@ export type ImCore = {
 
     renderFn: () => void;
 
-    keyboard: ImKeyboardState;
-    mouse:    ImMouseState;
-
     dtSeconds: number;
     tSeconds:  number;
     lastTime:  number;
@@ -64,16 +62,8 @@ export type ImCore = {
     _isExcessEventRender: boolean;
 
     // TODO: move to im-utils-dom
-    globalEventHandlers: {
-        mousedown:  (e: MouseEvent) => void;
-        mousemove:  (e: MouseEvent) => void;
-        mouseenter: (e: MouseEvent) => void;
-        mouseup:    (e: MouseEvent) => void;
-        wheel:      (e: WheelEvent) => void;
-        keydown:    (e: KeyboardEvent) => void;
-        keyup:      (e: KeyboardEvent) => void;
-        blur:       () => void;
-    };
+
+    imEventSystem: ImGlobalEventSystem;
 
     /** These are used to display performance metrics in the UI. */
     itemsRendered: number;
@@ -104,35 +94,6 @@ export type RemovedLevel
 
 /** Don't forget to initialize this core with {@link initImDomUtils} */
 export function newImCore(root: HTMLElement = document.body): ImCore {
-    const keyboard: ImKeyboardState = {
-        keyDown: null,
-        keyUp: null,
-        blur: false,
-    };
-
-    const mouse: ImMouseState = {
-        lastX: 0,
-        lastY: 0,
-
-        leftMouseButton: false,
-        middleMouseButton: false,
-        rightMouseButton: false,
-        hasMouseEvent: false,
-
-        dX: 0,
-        dY: 0,
-        X: 0,
-        Y: 0,
-
-        scrollWheel: 0,
-
-        clickedElement: null,
-        lastClickedElement: null,
-        lastClickedElementOriginal: null,
-        hoverElement: null,
-        hoverElementOriginal: null,
-    };
-
     const core: ImCore = {
         initialized: false,
         uninitialized: false,
@@ -145,9 +106,6 @@ export function newImCore(root: HTMLElement = document.body): ImCore {
         imDisabled: false,
 
         renderFn: renderStub,
-
-        keyboard,
-        mouse,
 
         dtSeconds: 0,
         tSeconds: 0,
@@ -163,70 +121,11 @@ export function newImCore(root: HTMLElement = document.body): ImCore {
         numIntersectionObservers: 0,
         numCacheMisses: 0,
 
-        // stored, so we can dispose them later if needed.
-        globalEventHandlers: {
-            mousedown: (e: MouseEvent) => {
-                setClickedElement(core.mouse, e.target);
-                mouse.hasMouseEvent = true;
-                if (e.button === 0) {
-                    mouse.leftMouseButton = true;
-                } else if (e.button === 1) {
-                    mouse.middleMouseButton = true;
-                } else if (e.button === 2) {
-                    mouse.rightMouseButton = true;
-                }
-            },
-            mousemove: (e: MouseEvent) => {
-                const { mouse } = core;
-                mouse.lastX = mouse.X;
-                mouse.lastY = mouse.Y;
-                mouse.X = e.clientX;
-                mouse.Y = e.clientY;
-                mouse.dX += mouse.X - mouse.lastX;
-                mouse.dY += mouse.Y - mouse.lastY;
-                mouse.hoverElementOriginal = e.target;
-            },
-            mouseenter: (e: MouseEvent) => {
-                const { mouse } = core;
-                mouse.hoverElementOriginal = e.target;
-            },
-            mouseup: (e: MouseEvent) => {
-                const { mouse } = core;
-                if (mouse.hasMouseEvent === true) {
-                    return;
-                }
-                if (e.button === 0) {
-                    mouse.leftMouseButton = false;
-                } else if (e.button === 1) {
-                    mouse.middleMouseButton = false;
-                } else if (e.button === 2) {
-                    mouse.rightMouseButton = false;
-                }
-            },
-            wheel: (e: WheelEvent) => {
-                const { mouse } = core;
-                mouse.scrollWheel += e.deltaX + e.deltaY + e.deltaZ;
-                mouse.hoverElementOriginal = e.target;
-                e.preventDefault();
-            },
-            keydown: (e: KeyboardEvent) => {
-                const { keyboard } = core;
-                keyboard.keyDown = e;
-                rerenderImCore(core, core.lastTime, true);
-            },
-            keyup: (e: KeyboardEvent) => {
-                const { keyboard } = core;
-                keyboard.keyUp = e;
-                rerenderImCore(core, core.lastTime, true);
-            },
-            blur: () => {
-                resetMouseState(core.mouse, true);
-                resetKeyboardState(core.keyboard);
-                core.keyboard.blur = true;
-                rerenderImCore(core, core.lastTime, true);
-            }
-        },
+        imEventSystem: newImGlobalEventSystem(),
     };
+
+    hasDomDependency;
+    core.imEventSystem.core = core;
 
     // the root is assumed to never be removed.
     core.appRoot.removeLevel = REMOVE_LEVEL_NONE;
@@ -1063,25 +962,7 @@ export function imBeginRoot<E extends ValidElement = ValidElement>(elementSuppli
  * This is called `imEnd` instad of `end`, because `end` is a good variable name that we don't want to squat on.
  */
 export function imEnd(removeLevel: RemovedLevel = REMOVE_LEVEL_DETATCHED, r: UIRoot = getCurrentRoot()) {
-    hasDomDependency;
-
-    const notDerived = r.elementSupplier !== null;
-    if (notDerived) {
-        // Defer the mouse events upwards, so that parent elements can handle it if they want
-        const el = r.root;
-        const parent = el.parentNode;
-
-        const mouse = imCore.mouse;
-        if (mouse.clickedElement === el) {
-            mouse.clickedElement = parent;
-        }
-        if (mouse.lastClickedElement === el) {
-            mouse.lastClickedElement = parent;
-        }
-        if (mouse.hoverElement === el) {
-            mouse.hoverElement = parent;
-        }
-    }
+    bubbleMouseEvents(r, imCore.imEventSystem);
 
     __popStack();
 
@@ -1349,55 +1230,6 @@ export function setImCore(core: ImCore) {
 }
 
 /**
- * Attatch an event handler of your choice to the current UI Root, and 
- * handle the event directly in the render function without lambdas.
- * 
- * This significanlty simplifies the implementation of error boundaries that respond to 
- * errors in arbitrary events.
- * 
- * NOTE: The event type must never change, because the event handler only gets added on the first render.
- * I have found that adding assertion code and even diffing code here has a significant impact on performance,
- * so I've chosen to not add it for now. In the future, I may expose the 
- * event types as integer enums, which should fix this issue. 
- */
-export function imOn<K extends keyof HTMLElementEventMap>(type: K): HTMLElementEventMap[K] | null {
-    const eventRef = imRef<HTMLElementEventMap[K]>();
-    const core = imCore;
-
-    if (imInit() === true) {
-        const r = getCurrentRoot();
-
-        const handler = (e: HTMLElementEventMap[K]) => {
-            eventRef.val = e;
-            rerenderImCore(core, core.lastTime, true);
-        }
-        r.root.addEventListener(
-            type, 
-            // @ts-expect-error this thing is fine, actually.
-            handler
-        );
-
-        core.numEventHandlers++;
-
-        addDestructor(r, () => {
-            core.numEventHandlers--;
-
-            r.root.removeEventListener(
-                type,
-                // @ts-expect-error this thing is fine, actually.
-                handler
-            );
-        });
-    }
-
-    if (eventRef.val === null) return null;
-
-    const ev = eventRef.val;
-    eventRef.val = null;
-    return ev;
-}
-
-/**
  * Returns true the first time it's called, and false every other time.
  */
 export function imInit(): boolean {
@@ -1455,18 +1287,8 @@ export function initImCore(core: ImCore) {
     core.initialized = true;
 
     // Initialize events
-    {
-        document.addEventListener("mousedown", core.globalEventHandlers.mousedown);
-        document.addEventListener("mousemove", core.globalEventHandlers.mousemove);
-        document.addEventListener("mouseenter", core.globalEventHandlers.mouseenter);
-        document.addEventListener("mouseup", core.globalEventHandlers.mouseup);
-        document.addEventListener("wheel", core.globalEventHandlers.wheel);
-        document.addEventListener("keydown", core.globalEventHandlers.keydown);
-        document.addEventListener("keyup", core.globalEventHandlers.keyup);
-        window.addEventListener("blur", core.globalEventHandlers.blur);
-    }
+    addDocumentAndWindowEventListeners(core.imEventSystem);
 }
-
 
 export function uninitImCore(core: ImCore) {
     if (core.initialized === false) {
@@ -1481,17 +1303,7 @@ export function uninitImCore(core: ImCore) {
 
     core.uninitialized = true;
 
-    // Remove the events
-    {
-        document.removeEventListener("mousedown", core.globalEventHandlers.mousedown);
-        document.removeEventListener("mousemove", core.globalEventHandlers.mousemove);
-        document.removeEventListener("mouseenter", core.globalEventHandlers.mouseenter);
-        document.removeEventListener("mouseup", core.globalEventHandlers.mouseup);
-        document.removeEventListener("wheel", core.globalEventHandlers.wheel);
-        document.removeEventListener("keydown", core.globalEventHandlers.keydown);
-        document.removeEventListener("keyup", core.globalEventHandlers.keyup);
-        window.removeEventListener("blur", core.globalEventHandlers.blur);
-    }
+    removeDocumentAndWindowEventListeners(core.imEventSystem);
 }
 
 /** 
@@ -1556,20 +1368,16 @@ export function rerenderImCore(core: ImCore, t: number, isInsideEvent: boolean) 
     enableIm();
     __beginUiRoot(core.appRoot, -1, -1, null);
 
-    // persistent things need to be reset every frame, for bubling order to remain consistent per render
-    core.mouse.lastClickedElement = core.mouse.lastClickedElementOriginal;
-    core.mouse.hoverElement = core.mouse.hoverElementOriginal;
+    beginProcessingImEvent(core.imEventSystem);
 
     // It is better to not try-catch this actually.
     // You shouldn't let any exceptions reach here under any circumstances.
     core.renderFn();
 
     // end frame
- 
-    resetKeyboardState(core.keyboard);
-    resetMouseState(core.mouse, false);
 
-    core.mouse.hasMouseEvent = false;
+    endProcessingImEvent(core.imEventSystem);
+
     core.itemsRenderedLastFrame = core.itemsRendered;
     core.itemsRendered = 0;
     core.isRendering = false;

@@ -11,7 +11,7 @@ import {
     initImDomUtils,
     imFor,
     imEndFor
-} from "src/utils/im-dom-utils";
+} from "src/utils/im-utils-core";
 import { initCssbStyles } from "./utils/cssb";
 
 const currentKeys = new Set<string>();
