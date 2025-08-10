@@ -823,7 +823,6 @@ export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
         result = { t: ITEM_STATE, typeId, val: undefined };
         items.push(result);
         imCore.numCacheMisses++;
-        imDisable("Expected a call to imSetState after imGetState (very easy to forget)");
     }
 
     imCore.itemsRendered++;
@@ -871,7 +870,13 @@ export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
  * TODO: think of a better solution to this problem.
  */
 export function imGetState<T>(typeId: TypeId<T>): T | undefined {
-    return imGetStateRef(typeId).val;
+    const result = imGetStateRef(typeId).val;
+
+    if (result === undefined) {
+        imDisable("Expected a call to imSetState after imGetState (very easy to forget)");
+    }
+
+    return result;
 }
 
 /**

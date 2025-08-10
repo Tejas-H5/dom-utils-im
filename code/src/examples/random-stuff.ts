@@ -33,6 +33,7 @@ import {
     elementHasMousePress,
     elementHasMouseHover,
     getImMouse,
+    removeDocumentAndWindowEventListeners,
 } from "src/utils/im-utils-dom";
 import {
     cn,
@@ -143,6 +144,11 @@ function resize(values: number[], gridRows: number, gridCols: number) {
     values.fill(1);
 }
 
+const GRID_DISABLED = 0;
+const GRID_FRAMEWORK = 1;
+const GRID_MOST_OPTIMAL = 2;
+const GRID_NUM_VARIANTS = 3;
+
 function newAppState() {
     const s = {
         rerender: () => { },
@@ -166,9 +172,9 @@ function newAppState() {
             s.count -= s.incrementValue;
             s.rerender();
         },
-        grid: true,
+        grid: GRID_DISABLED,
         toggleGrid() {
-            s.grid = !s.grid;
+            s.grid = (s.grid + 1) % GRID_NUM_VARIANTS;
             s.rerender();
         }
     }
@@ -335,7 +341,7 @@ function imPerfTimerOutput(fps: FpsCounterState) {
         }
 
         const core = getImCore();
-        imBeginSpan(); setText("Text span: " + core.itemsRenderedLastFrame); imEnd();
+        imBeginSpan(); setText("Items rendered: " + core.itemsRenderedLastFrame); imEnd();
 
     } imEnd();
 }
@@ -361,7 +367,7 @@ function imApp() {
         if (imIf() && !errRef.val) {
 
             let fps = imGetState(newFpsCounterState);
-            if (!fps) fps = newFpsCounterState();
+            if (!fps) fps = imSetState(newFpsCounterState());
 
             startPerfTimer(fps);
             imPerfTimerOutput(fps);
@@ -465,7 +471,7 @@ function imApp() {
             let gridState = imGetState(newGridState);
             if (!gridState) gridState = imSetState(newGridState());
 
-            if (imIf() && s.grid) {
+            if (imIf() && s.grid === GRID_FRAMEWORK) {
                 const dt = getDeltaTimeSeconds();
                 const { values, gridRows, gridCols } = gridState;
 
@@ -513,6 +519,91 @@ function imApp() {
                         } imEndFor();
                     } imEnd();
                 } imEndFor();
+            } else if (imElseIf() && s.grid === GRID_MOST_OPTIMAL) {
+                imBeginDiv(); setText("[Theoretical best performance upperbound with our current approach]  Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
+
+                const root = imBeginDiv(); {
+                    const dt = getDeltaTimeSeconds();
+                    const { values, gridRows, gridCols } = gridState;
+
+
+                    const gridRowsChanged = imMemo(gridRows);
+                    const gridColsChanged = imMemo(gridCols);
+
+                    let state; state = imGetState(inlineTypeId(newGridState));
+                    if (!state || gridRowsChanged || gridColsChanged) {
+                        // This bit is not quite optimal. Thats ok though - we put slop behind infrequent signals all the time.
+
+                        if (!state) state = imSetState<{ 
+                            rows: {
+                                root: HTMLElement;
+                                children: {
+                                    root: HTMLElement;
+                                    idx: number;
+                                    lastSignal: number;
+                                }[];
+                            }[];  
+                        }>({ rows: [] });
+
+                        while (state.rows.length > gridRows) state.rows.pop();
+                        while (state.rows.length < gridRows) {
+                            const row = document.createElement("div");
+                            row.style.display = "flex";
+                            root.root.appendChild(row);
+                            state.rows.push({ root: row, children: [] });
+                        }
+                        root.root.replaceChildren(...state.rows.map(r => r.root));
+
+                        for (let i = 0; i < state.rows.length; i++) {
+                            const row = state.rows[i];
+                            while (row.children.length > gridCols) row.children.pop();
+                            while (row.children.length < gridCols) {
+                                const child = document.createElement("div");
+                                const val = { root: child, idx: 0, lastSignal: 0, };
+                                row.children.push(val);
+                                // Leak it. who cares. Mark and sweep should collect this when it becomes unreachable.
+                                child.onmouseover = () => {
+                                    if (val.idx > values.length) throw new Error("bruh");
+                                    values[val.idx] = 1;
+                                }
+                                child.classList.add(cnGridTile);
+                            }
+                            row.root.replaceChildren(...row.children.map(c => c.root));
+                        }
+
+                        for (let rowIdx = 0; rowIdx < state.rows.length; rowIdx++) {
+                            const row = state.rows[rowIdx];
+                            for (let colIdx = 0; colIdx < row.children.length; colIdx++) {
+                                const cell = row.children[colIdx];
+                                cell.idx = colIdx + gridCols * rowIdx;
+                            }
+                        }
+                    }
+
+                    for (let i = 0; i < state.rows.length; i++) {
+                        const row = state.rows[i];
+                        for (let i = 0; i < row.children.length; i++) {
+                            const pixel = row.children[i];
+                            const idx = pixel.idx;
+
+                            // NOTE: usually you would do this with a CSS transition if you cared about performance, but
+                            // I'm just trying out some random stuff.
+                            let val = values[idx];
+                            if (val > 0) {
+                                val -= dt;
+                                if (val < 0) {
+                                    val = 0;
+                                }
+                                values[idx] = val;
+                            }
+
+                            const valRounded = Math.round(val * 255) / 255;
+                            if (valRounded !== pixel.lastSignal) {
+                                pixel.root.style.backgroundColor =`rgba(0, 0, 0, ${val})`;
+                            }
+                        }
+                    }
+                } imEnd();
             } imEndIf();
 
             imBeginDiv(); {
