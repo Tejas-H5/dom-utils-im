@@ -527,8 +527,8 @@ export function newSpan() {
     return document.createElement("span");
 }
 
-export function imBeginDiv(): UIRoot<HTMLDivElement> {
-    return imBeginRoot<HTMLDivElement>(newDiv);
+export function imBeginDiv(parent = getCurrentRoot()): UIRoot<HTMLDivElement> {
+    return imBeginRoot<HTMLDivElement>(newDiv, parent);
 }
 
 export function imBeginSpan(): UIRoot<HTMLSpanElement> {

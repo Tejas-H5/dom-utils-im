@@ -23,8 +23,9 @@
  * - prefer using if (x === true) instead of if (x). This appears to be better in performance.
  *
  * TODO:
- * - [...] Use typeId + state
- * - remove too much immediate mode state was being pushed check
+ * - use BeginListItem/EndListItem API to make list rendering more efficient
+ * - Figure out why iterating over vanilla ararys is much faster.
+ * - use imThingBegin/Next/End/Blah naming convention
  * - Decouple framework from DOM
  * - Far less yapping
  */
@@ -420,8 +421,9 @@ function __beginListRenderer(l: ListRenderer) {
  * ```ts
  * imBeginList(); 
  * for (const val of values) {
- *      imNextListRoot();
- *      imRenderComponent(val);
+ *      imBeginListItem() {
+ *          imRenderComponent(val);
+ *      } imEndListItem();
  * }
  * imEndList()
  * ```
@@ -431,44 +433,29 @@ function __beginListRenderer(l: ListRenderer) {
  * This allows us to do conditional rendering:
  * ```ts
  * imBeginlist()
- * if (imNextListRoot() && blah) {
+ * if (imBeginListItem() && blah) {
  *      // render your component here.
  * } 
- * if (imNextListRoot() && blah) {
+ * if ((imEndListItem() && imBeginListItem()) && blah) {
  *      // render your next component here.b
  * }
- * if (imNextListRoot() && blah) {
+ * if ((imEndListItem() && imBeginListItem()) && blah) {
  *      // render your next component here.b
  * }
- * imEndList()
+ * imEndListItem() || imEndList()
  * ```
  * As long as each call to `imNextListRoot()` always happens in the same order and no calls get skipped,
  * every callsite will resolve to the same immediate mode state each time, so this always works.
- * Here's a case where it won't work:
- * 
- * ``` ts
- * imBeginList();
- * if (imNextListRoot() && blah){}
- * else if (imNextListRoot() && blah2){}
- * if (imNextListRoot() && blah3) {
- *      // if blah was true the first render pass, and false in the second,
- *      // the framework has no way of knowing that the state for this if-statement
- *      // is not the same as the previous - all it can see is that this was the 
- *      // second call to `imNextListRoot()`. 
- * }
- * ```
  *
- * Also note that {@link imNextListRoot} can be passed a key, to avoid such errors.
- *
+ * There are certain configurations of if/else where it won't work!
  * Also, I have found that the patterns that emerge from doing conditional rendering in this
  * way don't lend themselves to ease of pattern recognition and refactoring.
  * This is why I've added {@link imFor}, {@link imIf}, {@link imSwitch} et al, so I never use 
- * imBeginList directly in practice. But it does help to know how they are all the same think under the hood.
+ * {@link imBeginList} or {@link imBeginListItem} directly in practice. 
+ * But it does help to know how they are all the same think under the hood.
  */
-export function imBeginList(removeLevel: ListRenderer["cacheRemoveLevel"] = REMOVE_LEVEL_DETATCHED): ListRenderer {
+export function imBeginList(removeLevel: ListRenderer["cacheRemoveLevel"] = REMOVE_LEVEL_DETATCHED, r = getCurrentRoot()): ListRenderer {
     const core = imCore;
-    const r = getCurrentRoot();
-
     const items = r.items;
     const idx = getNextItemSlotIdx(r, core);
 
@@ -551,7 +538,7 @@ function getNextItemSlotIdx(r: UIRoot, core: ImCore): number {
  */
 export function imIf() {
     imBeginList(REMOVE_LEVEL_DETATCHED);
-    imNextListRoot();
+    imBeginListItem();
     return true as const;
 }
 
@@ -580,28 +567,32 @@ export function imIf() {
  */
 export function imSwitch(key: ValidKey) {
     imBeginList(REMOVE_LEVEL_DETATCHED);
-    imNextListRoot(key);
+    imBeginListItem(key);
 }
 
 /** See {@link imSwitch} */
 export function imEndSwitch() {
+    imEndListItem();
     imEndList();
 }
 
 /** See {@link imIf} */
 export function imElseIf(): true {
-    imNextListRoot();
+    imEndListItem();
+    imBeginListItem();
     return true;
 }
 
 /** See {@link imIf} */
 export function imElse(): true {
-    imNextListRoot();
+    imEndListItem();
+    imBeginListItem();
     return true;
 }
 
 /** See {@link imIf} */
 export function imEndIf() {
+    imEndListItem();
     imEndList();
 }
 
@@ -648,7 +639,7 @@ export const imEndWhile = imEndList;
  */
 export function imTry(): ListRenderer {
     const l = imBeginList();
-    imNextListRoot();
+    imBeginListItem();
     return l;
 }
 
@@ -661,6 +652,11 @@ export function imCatch(l: ListRenderer) {
 /** See {@link imTry} */
 export function imEndTry() {
     imEnable();
+
+    if (imCore.topOfStack !== undefined && imCore.topOfStack.t === ITEM_UI_ROOT) {
+        imEndListItem();
+    }
+
     imEndList();
 }
 
@@ -683,8 +679,9 @@ export function imEndTry() {
  *
  * ```ts
  * imFor(); for (const item of items) {
- *      imNextListRoot(item);
- *      // render item here
+ *      imBeginListItem(item); {
+ *          // render item here
+ *      } imEndListItem();
  * } imEndFor();
  * ```
  *
@@ -701,15 +698,7 @@ export function imEndTry() {
  *
  * See the {@link UIRoot} docs for more info on what a 'UIRoot' even is, what it's limitations are, and how to effectively (re)-use them.
  */
-export function imNextListRoot(key?: ValidKey) {
-    if (imCore.topOfStack !== undefined && imCore.topOfStack.t === ITEM_UI_ROOT) {
-        const root = imCore.topOfStack;
-        if (root.parentListRenderer === null) throw new Error("Expected this root to have a list renderer");
-        imEnd(root.parentListRenderer.cacheRemoveLevel, root);
-    }
-
-    const l = getCurrentListRendererInternal();
-
+export function imBeginListItem(key?: ValidKey, l = getCurrentListRendererInternal()) {
     let result;
     if (key !== undefined) {
         // use the map
@@ -798,6 +787,11 @@ export function imNextListRoot(key?: ValidKey) {
     return result;
 }
 
+export function imEndListItem(root = getCurrentRoot()) {
+    if (root.parentListRenderer === null) throw new Error("Expected this root to have a list renderer");
+    imEnd(root.parentListRenderer.cacheRemoveLevel, root);
+}
+
 
 export type DeferredAction = (() => void) | undefined;
 
@@ -806,9 +800,7 @@ export type DeferredAction = (() => void) | undefined;
 // Common immediate mode UI helpers
 
 // You'll have to re-enable immediate mode if you want to use this method directly.
-export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
-    const r = getCurrentRoot();
-
+export function imGetStateRef<T>(typeId: TypeId<T>, r = getCurrentRoot()): StateItem<T | undefined> {
     const items = r.items;
     const idx = getNextItemSlotIdx(r, imCore);
 
@@ -868,8 +860,8 @@ export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
  * you may want to add them in at some point.
  * TODO: think of a better solution to this problem.
  */
-export function imGetState<T>(typeId: TypeId<T>): T | undefined {
-    const result = imGetStateRef(typeId).val;
+export function imGetState<T>(typeId: TypeId<T>, r = getCurrentRoot()): T | undefined {
+    const result = imGetStateRef(typeId, r).val;
 
     if (result === undefined) {
         imDisable("Expected a call to imSetState after imGetState (very easy to forget)");
@@ -933,10 +925,8 @@ const cssb = newCssBuilder("debug");
 const debugClass = cssb.cn("debug1pxSolidRed", [` { border: 1px solid red; }`]);
 // */
 
-export function imBeginRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
+export function imBeginRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E, parent = getCurrentRoot()): UIRoot<E> {
     hasDomDependency;
-
-    const parent = getCurrentRoot();
 
     const core = imCore;
 
@@ -1003,20 +993,7 @@ function __popStack() {
     }
 }
 
-export function imEndList() {
-    if (imCore.topOfStack !== undefined && imCore.topOfStack.t === ITEM_UI_ROOT) {
-        const root = imCore.topOfStack;
-        if (root.parentListRenderer === null) throw new Error("Expected this root to have a list renderer");
-        imEnd(root.parentListRenderer.cacheRemoveLevel, root);
-    }
-
-    // NOTE: the main reason why I won't make a third ITEM_COMPONENT_FENCE 
-    // to detect an incorrect number of calls to im() and imEnd() methods, is because
-    // most UI components will interlace imList() and imRoot() methods frequently enough that
-    // this assertion here or the one in imEnd() will already catch this bug most of the time.
-    const l = getCurrentListRendererInternal();
-
-    // close out this list renderer.
+export function imEndList(l = getCurrentListRendererInternal()) {
 
     // remove all the UI components that may have been added by other builders in the previous render.
     for (let i = l.builderIdx; i < l.builders.length; i++) {
@@ -1092,7 +1069,7 @@ export function abortListAndRewindUiStack(l: ListRenderer) {
  *  if (imMemo(val === MEMO_CHANGED)) { //side-effect }
  *  ```
  */
-export function imMemo(val: unknown): ImMemoResult {
+export function imMemo(val: unknown, r = getCurrentRoot()): ImMemoResult {
     // NOTE: I had previously implemented imBeginMemo() and imEndMemo():
     // ```
     // if (imBeginMemo().val(x).objectVals(obj)) {
@@ -1110,10 +1087,9 @@ export function imMemo(val: unknown): ImMemoResult {
     // to imMemoDeep() which I definately don't want to ever implement. Also I was basically never using them. So I
     // have deleted them.
 
-    const r = getCurrentRoot();
     let result: ImMemoResult = MEMO_NOT_CHANGED;
 
-    let lastVal; lastVal = imGetState(inlineTypeId(imMemo)); {
+    let lastVal; lastVal = imGetState(inlineTypeId(imMemo), r); {
         if (lastVal === undefined) {
             // this way, imMemo always returns true on the first render
             lastVal = imSetState(MEMO_INITIAL_VALUE); 

@@ -16,11 +16,13 @@ import {
     imFor,
     imEndFor,
     imEndTry,
-    imNextListRoot,
     getImCore,
     imIsFirstishRender,
     imSetState,
     inlineTypeId,
+    imBeginListItem,
+    imEndListItem,
+    REMOVE_LEVEL_DETATCHED,
 } from "src/utils/im-utils-core";
 import {
     setClass,
@@ -128,11 +130,11 @@ function WallClock() {
     let n = s < 0 ? 1 : 2;
     n = 2; // TODO: revert
     imFor(); for (let i = 0; i < n; i++) {
-        imNextListRoot(); 
-
-        imBeginDiv();  {
-            imText(new Date().toISOString());
-        } imEnd();
+        imBeginListItem(); {
+            imBeginDiv(); {
+                imText(new Date().toISOString());
+            } imEnd();
+        } imEndListItem();
     } imEndFor();
 }
 
@@ -169,7 +171,7 @@ function newAppState() {
             s.count -= s.incrementValue;
             s.rerender();
         },
-        grid: GRID_DISABLED,
+        grid: GRID_FRAMEWORK,
         toggleGrid() {
             s.grid = (s.grid + 1) % GRID_NUM_VARIANTS;
             s.rerender();
@@ -346,7 +348,7 @@ function imPerfTimerOutput(fps: FpsCounterState) {
 const cssb = newCssBuilder();
 // border 1px solid red actually induces lag...
 const cnGridTile = cssb.cn("grid-tile", [
-    ` { display: inline-block; width: 100px; height: 100px; aspect-ratio: 1 / 1; 
+    ` { position: relative; display: inline-block; width: 100px; height: 100px; aspect-ratio: 1 / 1; 
         border: 1px solid red; 
 } `
 ]);
@@ -369,7 +371,7 @@ function imApp() {
             startPerfTimer(fps);
             imPerfTimerOutput(fps);
 
-            const row = imBeginDiv(); {
+            imBeginDiv(); {
                 imButton("Click me!", () => {
                     alert("noo");
                 });
@@ -424,9 +426,7 @@ function imApp() {
                     } imEndIf();
                 }
                 imEnd();
-
-            }
-            imEnd();
+            } imEnd();
 
 
             imBeginDiv(); {
@@ -449,19 +449,20 @@ function imApp() {
                 } 
 
                 imFor(); for (let i = 0; i <= n; i++) {
-                    imNextListRoot();
-                    imBeginDiv(); {
-                        if (imInit()) {
-                            setStyle("flex", "1");
-                            setStyle("height", "100%");
-                        }
+                    imBeginListItem(); {
+                        imBeginDiv(); {
+                            if (imInit()) {
+                                setStyle("flex", "1");
+                                setStyle("height", "100%");
+                            }
 
-                        const present = i === pingPong.pos;
-                        const changed = imMemo(present);
-                        if (changed) {
-                            setStyle("backgroundColor", present ? "#000" : "#FFF");
-                        }
-                    } imEnd();
+                            const present = i === pingPong.pos;
+                            const changed = imMemo(present);
+                            if (changed) {
+                                setStyle("backgroundColor", present ? "#000" : "#FFF");
+                            }
+                        } imEnd();
+                    } imEndListItem();
                 } imEndFor();
             } imEnd();
             
@@ -474,48 +475,60 @@ function imApp() {
 
                 imBeginDiv(); imText("Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
 
-                imFor(); for (let row = 0; row < gridRows; row++) {
-                    imNextListRoot();
+                const l = imFor(); for (let row = 0; row < gridRows; row++) {
+                    const root = imBeginListItem(undefined, l); {
+                        const root2 = imBeginDiv(root); {
+                            if (root2.completedOneRender === false) {
+                                setAttr("style", "display: flex;");
+                            }
 
-                    imBeginDiv(); 
-                        if (imIsFirstishRender()) {
-                            setAttr("style", "display: flex;");
-                        }
-
-                        imFor(); for (let col = 0; col < gridCols; col++) {
-                            imNextListRoot(); 
-                            imBeginDiv(); {
-                                if (imIsFirstishRender()) {
-                                    setClass(cnGridTile);
-                                }
+                            const l = imFor(REMOVE_LEVEL_DETATCHED, root2); for (let col = 0; col < gridCols; col++) {
+                                const parent = imBeginListItem(undefined, l); {
+                                    const root = imBeginDiv(parent); {
+                                        if (root.completedOneRender === false) {
+                                            setClass(cnGridTile);
+                                        }
 
 
-                                const idx = col + gridCols * row;
+                                        const idx = col + gridCols * row;
 
-                                if (elementHasMouseHover()) {
-                                    values[idx] = 1;
-                                }
+                                        if (elementHasMouseHover()) {
+                                            values[idx] = 1;
+                                        }
 
-                                // NOTE: usually you would do this with a CSS transition if you cared about performance, but
-                                // I'm just trying out some random stuff.
-                                let val = values[idx];
-                                if (val > 0) {
-                                    val -= dt;
-                                    if (val < 0) {
-                                        val = 0;
-                                    }
-                                    values[idx] = val;
-                                }
+                                        // NOTE: usually you would do this with a CSS transition if you cared about performance, but
+                                        // I'm just trying out some random stuff.
+                                        let val = values[idx];
+                                        if (val > 0) {
+                                            val -= dt;
+                                            if (val < 0) {
+                                                val = 0;
+                                            }
+                                            values[idx] = val;
+                                        }
 
-                                const valRounded = Math.round(val * 255) / 255;
-                                const styleChanged = imMemo(valRounded);
-                                if (styleChanged) {
-                                    setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
-                                } 
-                            } imEnd();
-                        } imEndFor();
-                     imEnd();
-                } imEndFor();
+                                        const valRounded = Math.round(val * 255) / 255;
+                                        const styleChanged = imMemo(valRounded, root);
+                                        if (styleChanged) {
+                                            setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
+                                        }
+
+                                        // imBeginDiv(); {
+                                        //     if (imIsFirstishRender()) {
+                                        //         setStyle("position", "absolute");
+                                        //         setStyle("top", "25%");
+                                        //         setStyle("left", "25%");
+                                        //         setStyle("right", "25%");
+                                        //         setStyle("bottom", "25%");
+                                        //         setStyle("backgroundColor", "white");
+                                        //     }
+                                        // } imEnd();
+                                    } imEnd(REMOVE_LEVEL_DETATCHED, root);
+                                } imEndListItem(parent);
+                            } imEndFor(l);
+                        } imEnd(REMOVE_LEVEL_DETATCHED, root2);
+                    } imEndListItem(root);
+                } imEndFor(l);
             } else if (imElseIf() && s.grid === GRID_MOST_OPTIMAL) {
                 imBeginDiv(); imText("[Theoretical best performance upperbound with our current approach]  Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
 
