@@ -1,47 +1,12 @@
-import {
-    getAttr,
-    imBeginDiv,
-    imInit,
-    setAttr,
-    setClass
-} from "src/utils/im-utils-core";
-import { cn } from "./utils/cssb";
-import { imBeginRoot, imEnd, imTextSpan } from "./utils/im-utils-core";
+import { imBeginRoot, } from "./utils/im-utils-core";
+import { imInitStyles } from "./components/core/layout";
 
-export const ROW = 1 << 0;
-export const COL = 1 << 1;
-export const RELATIVE = 1 << 2;
-export const FLEX1 = 1 << 3;
+const newH3 = () => document.createElement("h3");
 
-export function imBeginLayout(flags: number = 0) {
-    const root = imBeginDiv();
-    setClass(cn.row, flags & ROW);
-    setClass(cn.col, flags & COL);
-    setClass(cn.relative, flags & RELATIVE);
-    setClass(cn.flex1, flags & FLEX1);
-    return root;
-}
-
-export function imInitStyles(str: string) {
-    if (imInit()) {
-        setAttr("style", getAttr("style") + ";" + str);
-        return true;
-    }
-    return false;
-}
-
-export const newUl     = () => document.createElement("ul");
-export const newLi     = () => document.createElement("li");
-export const newH3     = () => document.createElement("h3");
-export const newIFrame = () => document.createElement("iframe");
-export const newA      = () => document.createElement("a");
-
-
-export function imHeading(text: string) {
+export function imH3() {
     imBeginRoot(newH3); {
         imInitStyles(`font-weight: bold; font-size: 2rem; text-align: center;`);
-        imTextSpan(text);
-    } imEnd();
+    };
 }
 
 export type ViewableError = { error: string; stack: string; };

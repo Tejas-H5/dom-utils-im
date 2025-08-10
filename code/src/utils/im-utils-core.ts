@@ -33,6 +33,8 @@
 import { assert } from "./assert";
 import { newCssBuilder } from "./cssb";
 
+"use strict";
+
 // TODO: remove/invert dependency
 import { addDocumentAndWindowEventListeners, appendToDomRoot, beginProcessingImEvent, bubbleMouseEvents, DomAppender, endProcessingImEvent, ImGlobalEventSystem, newImGlobalEventSystem, removeDocumentAndWindowEventListeners, setClass } from "./im-utils-dom";
 
@@ -52,6 +54,7 @@ export type ImCore = {
     currentListRenderer: ListRenderer | undefined;
 
     imDisabled:       boolean;
+    imDisabledReason: string;
 
     renderFn: () => void;
 
@@ -94,9 +97,6 @@ export type RemovedLevel
     | typeof REMOVE_LEVEL_DETATCHED   // This is the default remove level. The increase in performance far oughtweighs any memory problems. 
     | typeof REMOVE_LEVEL_DESTROYED;
 
-// The T here is purely used as a TypeScript compiler construct, and isn't used in the actual code.
-export type TypeId<T> = number & { TypeId: void; };
-
 /** 
  * NOTE: some atypical usecases require multiple cores,
  * so make sure that your event handlers capture the one that is current
@@ -118,16 +118,6 @@ const defaultCore = newImCore();
 // Contains ALL the state. In an atypical usecase, there may be multiple cores that must switch between each other.
 let imCore = defaultCore;
 
-// actually shouldn't be in imCore
-let typeIdCounter = 1 as TypeId<any>;
-let canCreateMoreTypes = true;
-export function nextTypeId<T>(): TypeId<T> {
-    if (!canCreateMoreTypes) throw new Error("Can't create more types after you've initialized the framework :)");
-    return typeIdCounter++ as TypeId<T>;
-}
-
-export const TYPEID_INLINE = 0 as TypeId<undefined>;
-
 /** Don't forget to initialize this core with {@link initImDomUtils} */
 export function newImCore(root: HTMLElement = document.body): ImCore {
     const core: ImCore = {
@@ -140,6 +130,7 @@ export function newImCore(root: HTMLElement = document.body): ImCore {
         currentListRenderer: undefined,
 
         imDisabled: false,
+        imDisabledReason: "",
 
         renderFn: renderStub,
 
@@ -244,7 +235,7 @@ export type ListRenderer = {
 export type StateItem<T = unknown>  = {
     t: typeof ITEM_STATE;
     typeId: TypeId<T>;
-    v: T | undefined;
+    val: T | undefined;
 };
 
 export type RenderFn<T extends ValidElement = ValidElement> = (r: UIRoot<T>) => void;
@@ -405,7 +396,7 @@ export function __removeAllDomElementsFromUiRoot(r: UIRoot, removeLevel: Removed
     }
 }
 
-export function addDestructor(r: UIRoot, destructor: () => void) {
+export function addDestructor(destructor: () => void, r = getCurrentRoot()) {
     if (r.destructors === undefined) r.destructors = [];
     r.destructors.push(destructor);
 }
@@ -508,7 +499,9 @@ const cssb = newCssBuilder("im-dom-utils--debug");
 const debug1PxSolidRed = cssb.cn("debug1pxSolidRed", [` { border: 1px solid red; }`]);
 
 function getNextItemSlotIdx(r: UIRoot, core: ImCore): number {
-    if (core.imDisabled === true) throw new Error("Immediate mode has beend disabled for this section");
+    if (core.imDisabled === true) {
+        throw new Error("Immediate mode has beend disabled for this section: " + core.imDisabledReason);
+    }
 
     if (r.itemsIdx === -1) { 
         if (r.isInConditionalPathway === false) {
@@ -663,12 +656,12 @@ export function imTry(): ListRenderer {
 /** See {@link imTry} */
 export function imCatch(l: ListRenderer) {
     abortListAndRewindUiStack(l);
-    disableIm();
+    imDisable("Don't use immideate mode inside the catch block");
 }
 
 /** See {@link imTry} */
 export function imEndTry() {
-    enableIm();
+    imEnable();
     imEndList();
 }
 
@@ -813,6 +806,7 @@ export type DeferredAction = (() => void) | undefined;
 ///////// 
 // Common immediate mode UI helpers
 
+// You'll have to re-enable immediate mode if you want to use this method directly.
 export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
     const r = getCurrentRoot();
 
@@ -826,9 +820,10 @@ export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
         if (box.typeId !== typeId) throw new Error("immediate mode state was queried out of order - wrong state type");
         result = box as StateItem<T>;
     } else {
-        result = { t: ITEM_STATE, typeId, v: undefined };
+        result = { t: ITEM_STATE, typeId, val: undefined };
         items.push(result);
         imCore.numCacheMisses++;
+        imDisable("Expected a call to imSetState after imGetState (very easy to forget)");
     }
 
     imCore.itemsRendered++;
@@ -837,9 +832,13 @@ export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
 }
 
 /**
+ * TODO: write abot other uses
+ * - Sure, it uniquely ids the method. but the type can by cyclical. If it's being used inside a wrapper method for instance, 
+ *   we can infer the type off whatever the method returns.
+ *
  * This method returns a stable reference to some state, allowing your component to maintain
  * state between rerenders. 
- * At the start, you can just use {@link TYPEID_INLINE} to get something working
+ * At the start, you can just use {@link InlineTypeId} to get something working
  * without having to declare a type and instantiate it:
  *
  * ```ts
@@ -863,15 +862,42 @@ export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
  * }
  * const AppStateTypeId = nextTypeId<AppState>();
  * ```
+ *
+ * The typeId is used to reduce the chance of out-of-order rendering errors, where
+ * one callsite accesses the state from another callsite - this only happens if 
+ * imEntries are queried out of order, or if new queries are inserted conditionally on subsequent renders.
+ * If all your typieIds are {@link InlineTypeId), you'l never catch this bug, so 
+ * you may want to add them in at some point.
+ * TODO: think of a better solution to this problem.
  */
 export function imGetState<T>(typeId: TypeId<T>): T | undefined {
-    return imGetStateRef(typeId).v;
+    return imGetStateRef(typeId).val;
 }
+
+/**
+ * Prototyping something? Defining something inline? You've probably got some functions lying around.
+ * ```ts
+ * let s; s = imGetState(inlineTypeId(Math.random));
+ * if (!s) s = imSetState({
+ *      x: 0, 
+ *      y: 0,
+ *      array: [],
+ *      // literallly has nothign to do with the function you used as the id
+ * });
+ *
+ * ```
+ */
+export function inlineTypeId<T = undefined>(fn: Function) {
+    return fn as TypeId<T>;
+}
+
+export type TypeId<T> = (...args: any[]) => T;
 
 export function imSetState<T>(val: T): T {
     const r = getCurrentRoot();
     const item = r.items[r.itemsIdx]; 
-    assert(item.t === ITEM_STATE); item.v = val;
+    assert(item.t === ITEM_STATE); item.val = val;
+    imEnable();
     return val;
 }
 
@@ -1098,31 +1124,36 @@ export function abortListAndRewindUiStack(l: ListRenderer) {
  *  if (imMemo(val === MEMO_CHANGED)) { //side-effect }
  *  ```
  */
-// NOTE: I had previously implemented imBeginMemo() and imEndMemo():
-// ```
-// if (imBeginMemo().val(x).objectVals(obj)) {
-//      <Memoized component>
-// } imEndMemo();
-// ```
-// It's pretty straightforward to implement - just memorize the dom index and the state index,
-// ensure it returns true the first time so that you always have some components,
-// and then onwards, if the values are the same, just advance the dom index and state index.
-// else, return true and allow the rendering code to do this for you, and cache the new offsets
-// in imEndMemo. Looks great right? Ended up with all sorts of stale state bugs so I deleted it.
-// It's just not worth it ever, imo.
-//
-// I also previously had imMemoMany(), imMemoArray() and imMemoObjectVals, but these are a slipperly slope
-// to imMemoDeep() which I definately don't want to ever implement. Also I was basically never using them. So I 
-// have deleted them.
 export function imMemo(val: unknown): ImMemoResult {
+    // NOTE: I had previously implemented imBeginMemo() and imEndMemo():
+    // ```
+    // if (imBeginMemo().val(x).objectVals(obj)) {
+    //      <Memoized component>
+    // } imEndMemo();
+    // ```
+    // It's pretty straightforward to implement - just memorize the dom index and the state index,
+    // ensure it returns true the first time so that you always have some components,
+    // and then onwards, if the values are the same, just advance the dom index and state index.
+    // else, return true and allow the rendering code to do this for you, and cache the new offsets
+    // in imEndMemo. Looks great right? Ended up with all sorts of stale state bugs so I deleted it.
+    // It's just not worth it ever, imo.
+    //
+    // I also previously had imMemoMany(), imMemoArray() and imMemoObjectVals, but these are a slipperly slope
+    // to imMemoDeep() which I definately don't want to ever implement. Also I was basically never using them. So I
+    // have deleted them.
+
     const r = getCurrentRoot();
     let result: ImMemoResult = MEMO_NOT_CHANGED;
 
-    let lastVal = imGetState(TYPEID_ImMemoState); {
-        if (lastVal === undefined) lastVal = imSetState(MEMO_INITIAL_VALUE); // this way, imMemo always returns true on the first render
+    let lastVal; lastVal = imGetState(inlineTypeId(imMemo)); {
+        if (lastVal === undefined) {
+            // this way, imMemo always returns true on the first render
+            lastVal = imSetState(MEMO_INITIAL_VALUE); 
+        }
+
         if (lastVal !== val) {
             result = lastVal === MEMO_INITIAL_VALUE ? MEMO_FIRST_RENDER : MEMO_CHANGED;
-            imSetState(MEMO_INITIAL_VALUE)
+            imSetState(val);
         } else if (r.startedConditionallyRendering === true) {
             result = MEMO_FIRST_RENDER_CONDITIONAL;
         }
@@ -1130,7 +1161,6 @@ export function imMemo(val: unknown): ImMemoResult {
 
     return result;
 }
-const TYPEID_ImMemoState = nextTypeId<unknown>();
 const MEMO_INITIAL_VALUE = {};
 
 export const MEMO_NOT_CHANGED  = 0;
@@ -1154,12 +1184,14 @@ export type ImMemoResult
     | typeof MEMO_FIRST_RENDER
     | typeof MEMO_FIRST_RENDER_CONDITIONAL;
 
-export function disableIm() {
+export function imDisable(reason = "It's not a good idea to use immediate mode here") {
     imCore.imDisabled = true;
+    imCore.imDisabledReason = reason;
 }
 
-export function enableIm() {
+export function imEnable() {
     imCore.imDisabled = false;
+    imCore.imDisabledReason = "";
 }
 
 export function getImCore(): ImCore {
@@ -1175,12 +1207,11 @@ export function setImCore(core: ImCore) {
  * If you're using another sate ref, you probably don't even need this.
  */
 export function imInit(): boolean {
-    let result = imGetState(TYPEID_ImInit) === undefined;
+    let result = imGetState(imInit) === undefined;
     if (result === true) imSetState(true);
 
     return result;
 }
-const TYPEID_ImInit = nextTypeId<boolean>();
 
 export function getDeltaTimeSeconds(): number {
     return imCore.dtSeconds;
@@ -1250,7 +1281,6 @@ export function uninitImCore(core: ImCore) {
  * Take a look inside if you need something more custom.
  */
 export function initImDomUtils(renderFn: () => void): ImCore {
-    canCreateMoreTypes = false;
     initImCore(defaultCore);
     startAnimationLoop(defaultCore, renderFn);
     return defaultCore;
@@ -1305,7 +1335,7 @@ export function rerenderImCore(core: ImCore, t: number, isInsideEvent: boolean) 
 
     core.isRendering = true;
     core.currentStack.length = 0;
-    enableIm();
+    imEnable();
     __beginUiRoot(core.appRoot, -1, -1, null);
 
     beginProcessingImEvent(core.imEventSystem);

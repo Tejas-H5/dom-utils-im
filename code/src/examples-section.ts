@@ -1,12 +1,15 @@
-import { imBeginEditableTextArea } from "./components/text-area";
-import { COL, imBeginLayout, imInitStyles, ROW, toViewableError, ViewableError } from "./design";
+import { imBegin, imInitStyles, ROW } from "./components/core/layout";
+import { imStr } from "./components/text";
+import { doExtraTextAreaInputHandling, imBeginTextArea } from "./components/text-area";
+import { toViewableError, ViewableError } from "./design";
 import { cn, newCssBuilder } from "./utils/cssb";
 
-import * as domUtils from "src/utils/im-utils-core";
+// We're exposing this entire module to some other code.
+// We don't necessarily have to use them in this file itself thouhg.
+import * as imUtilsCore from "src/utils/im-utils-core";
+import * as imUtilsDom from "src/utils/im-utils-dom";
+
 import {
-    elementHasMousePress,
-    imStateInline,
-    setClass,
     imSwitch,
     imEndSwitch,
     imCatch,
@@ -17,16 +20,15 @@ import {
     imFor,
     imIf,
     imElse,
-    imInit,
     imMemo,
-    imOn,
-    imRef,
-    imGetState,
-    imTextSpan,
     imTry,
-    nextListRoot,
-    setAttr,
 } from "src/utils/im-utils-core"
+import {
+    elementHasMousePress,
+    setClass,
+    imOn,
+    setAttr,
+} from "src/utils/im-utils-dom"
 
 
 function recomputeCustomRenderFn(code: string): (() => void) {
@@ -35,11 +37,12 @@ function recomputeCustomRenderFn(code: string): (() => void) {
     };
 
     (new Function(`
-const macroSource = "use strict";
-return (domUtils, document, console, exports) => { 
-    const { ${Object.keys(domUtils).join(", ")} } = domUtils; 
+"use strict";
+return (imUtilsCore, imUtilsDom, document, console, exports) => { 
+    const { ${Object.keys(imUtilsCore).join(", ")} } = imUtilsCore; 
+    const { ${Object.keys(imUtilsDom).join(", ")} } = imUtilsDom; 
     ${code} 
-};`)())(domUtils, document, console, exports);
+};`)())(imUtilsCore, imUtilsDom, document, console, exports);
 
     return exports.renderFn;
 }
@@ -181,7 +184,7 @@ function newExamplesSectionState(): ExamplesSectionState  {
     };
 }
 
-function setText(s: ExamplesSectionState, text: string) {
+function exampleSectionStateSetText(s: ExamplesSectionState, text: string) {
     s.text = text;
     s.code = recomputeCustomRenderFn(text);
     try {
@@ -195,7 +198,7 @@ function setText(s: ExamplesSectionState, text: string) {
 
 function setExample(s: ExamplesSectionState, idx: number) {
     s.exampleIdx = idx;
-    setText(s, s.examples[idx].code);
+    exampleSectionStateSetText(s, s.examples[idx].code);
 }
 
 const cssb = newCssBuilder();
@@ -219,26 +222,24 @@ const cnTabContainer = cssb.cn("tab-container", [
 
 
 export function imExampleSection() {
-    const s = imGetState(newExamplesSectionState);
-    if (imInit()) {
-        s.examples.push(...originalExamples);
-    }
+    let s; s = imUtilsCore.imGetState(imUtilsCore.inlineTypeId(imExampleSection));
+    if (!s) s = newExamplesSectionState();
 
     const currentExample = s.examples[s.exampleIdx];
     const currentExampleChanged = imMemo(currentExample);
     if (currentExampleChanged) {
-        setText(s, currentExample.code.trim());
+        exampleSectionStateSetText(s, currentExample.code.trim());
     }
 
     // Content
-    imBeginLayout(); {
+    imBegin(); {
         imInitStyles(`padding: 10px; border: 1px solid black;`);
 
-        imBeginLayout(ROW); {
+        imBegin(ROW); {
             imInitStyles(`gap: 5px`);
             imInitStyles(`aspect-ratio: 16 / 6`);
 
-            imBeginLayout(); {
+            imBegin(); {
                 imInitStyles(`flex: 1; overflow: auto; border: 1px solid black`);
 
                 const l = imTry(); try {
@@ -247,14 +248,14 @@ export function imExampleSection() {
                         // Turns out we _do_ need to render the custom code in it's own context
                         // so that we can recover from otherwise fatal errors like a missing call to imEnd().
 
-                        const customCtxRoot = imBeginLayout(); {
-                            const customCtxRef = imRef<domUtils.ImContext>();
-                            if (!customCtxRef.val) {
-                                // TODO: need a way to de-initialize a context. i.e remove event handlers.
-                                customCtxRef.val = domUtils.newImContext(customCtxRoot.root)
-                                domUtils.initImContext(customCtxRef.val);
-
-                                customCtxRef.val.renderFn = function imEditableComponent() {
+                        const customCtxRoot = imBegin(); {
+                            let customCtx = imUtilsCore.imGetState(imUtilsCore.newImCore);
+                            if (!customCtx) {
+                                const newCore = imUtilsCore.imSetState(imUtilsCore.newImCore(customCtxRoot.root));
+                                customCtx = newCore;
+                                imUtilsCore.initImCore(newCore);
+                                imUtilsCore.addDestructor(() => imUtilsCore.uninitImCore(newCore));
+                                newCore.renderFn = function imEditableComponent() {
                                     // This 'component' is different every time it's function is recomputed
                                     imSwitch(s.code);
                                     s.code();
@@ -262,28 +263,25 @@ export function imExampleSection() {
                                 };
                             }
 
-                            const customCtx = customCtxRef.val;
-                            const currentCtx = domUtils.getImContext();
+                            const currentCtx = imUtilsCore.getImCore();
 
                             try {
                                 // TODO: How would we provide the time in a non-realtime environment?
                                 // If using React, might need to run this inside a framer-motion animation loop.
                                 customCtx.isRendering = false;
-                                domUtils.rerenderImContext(customCtx, currentCtx.lastTime, false);
+                                imUtilsCore.rerenderImCore(customCtx, currentCtx.lastTime, false);
                             } finally {
-                                domUtils.setImContext(currentCtx);
+                                imUtilsCore.setImCore(currentCtx);
                             }
                         } imEnd();
                     } else {
                         imElse();
 
-                        imBeginLayout(); {
+                        imBegin(); {
                             imInitStyles(`white-space: pre`);
 
-                            imTextSpan("An error occured: " + err!.error);
-                            imBeginLayout(); {
-                                imTextSpan("" + err!.stack);
-                            } imEnd();
+                            imStr("An error occured: " + err!.error); 
+                            imBegin(); imStr(err!.stack); imEnd();
                         } imEnd();
                     } imEndIf();
                 } catch (e) {
@@ -292,17 +290,17 @@ export function imExampleSection() {
                 } imEndTry();
             } imEnd();
 
-            imBeginLayout(COL); {
+            imBegin(COL); {
                 imInitStyles(`flex: 1`);
                 setClass(cn.overflowYAuto);
 
                 // Tabs
-                imBeginLayout(ROW); {
+                imBegin(ROW); {
                     if (imInitStyles(`gap: 5px`)) {
                         setClass(cnTabContainer);
                     }
 
-                    imBeginLayout(); {
+                    imBegin(); {
                         imInitStyles(`flex: 1`);
                         imFor(); for (
                             let i = 0;
@@ -310,8 +308,8 @@ export function imExampleSection() {
                             i++
                         ) {
                             const example = s.examples[i];
-                            nextListRoot();
-                            imBeginLayout(); {
+                            imUtilsCore.imNextListRoot();
+                            imBegin(); {
                                 if (imInitStyles(
                                     `display: inline-block; font-weight: bold; padding: 3px 5px; padding-right: 20px; 
                                     border: 1px solid black; border-bottom: none; border-radius: 4px 4px 0px 0px;`
@@ -324,7 +322,7 @@ export function imExampleSection() {
                                     setClass("selected", selected);
                                 }
 
-                                imTextSpan(example.name);
+                                 imStr(example.name);
 
                                 if (elementHasMousePress()) {
                                     setExample(s, i);
@@ -335,7 +333,7 @@ export function imExampleSection() {
                     } imEnd();
                 } imEnd();
 
-                imBeginLayout(); {
+                imBegin(); {
                     if (imInitStyles(`
                         flex: 1; background-colour: #888; font-family: monospace; font-size: 1rem;
                         padding: 5px; border: 1px solid black;`
@@ -343,19 +341,17 @@ export function imExampleSection() {
                         setAttr("spellcheck", "false");
                     }
 
-                    const textAreaRef = imRef<HTMLTextAreaElement>();
-                    imBeginEditableTextArea({
-                        text: s.text,
-                        isEditing: true,
-                        config: {
-                            useSpacesInsteadOfTabs: true,
-                            tabStopSize: 4,
-                        },
-                        textAreaRef,
-                    }); {
-                        const eInput = imOn("input");
-                        if (eInput) {
-                            setText(s, textAreaRef.val!.value);
+                    const [_, textArea] = imBeginTextArea({ value: s.text, }); {
+                        const input = imOn("input");
+                        const keydown = imOn("keydown");
+                        if (keydown) {
+                            doExtraTextAreaInputHandling(keydown, textArea.root, {
+                                useSpacesInsteadOfTabs: true,
+                                tabStopSize: 4,
+                            });
+                        }
+                        if (input) {
+                            exampleSectionStateSetText(s, textArea.root.value);
                         }
                     } imEnd();
                 } imEnd();

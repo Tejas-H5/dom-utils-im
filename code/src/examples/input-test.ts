@@ -1,17 +1,19 @@
+import { imStr } from "src/components/text";
 import {
-    getImKeys as getKeyboardEvents,
-    imBeginDiv,
     imEnd,
     imInit,
-    setStyle,
-    getImMouse,
-    imTextSpan,
-    setAttr,
-    nextListRoot,
     initImDomUtils,
     imFor,
-    imEndFor
+    imEndFor,
+    imNextListRoot
 } from "src/utils/im-utils-core";
+import {
+    imBeginDiv,
+    setStyle,
+    getImMouse,
+    setAttr,
+    getImKeys,
+} from "src/utils/im-utils-dom";
 
 const currentKeys = new Set<string>();
 
@@ -20,7 +22,7 @@ function render() {
         setAttr("style", "font-size: 24px");
     }
 
-    const { keyDown, keyUp, blur } = getKeyboardEvents();
+    const { keyDown, keyUp, blur } = getImKeys();
     if (keyDown) {
         currentKeys.add(keyDown.key);
     }
@@ -32,8 +34,8 @@ function render() {
     }
 
     imFor(); for (const key of currentKeys) {
-        nextListRoot();
-        imTextSpan(key + ", ")
+        imNextListRoot();
+        imStr(key + ", ");
     } imEndFor();
 
     imBeginDiv(); {

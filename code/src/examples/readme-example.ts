@@ -1,19 +1,17 @@
 import { initCssbStyles } from "src/utils/cssb";
 import {
-    imBeginDiv,
-    setInnerText,
     imEnd,
-    imGetState,
-    elementHasMousePress,
     initImDomUtils,
-    imIf,
-    imEndIf,
     imBeginRoot,
     imFor,
     imEndFor,
-    nextListRoot,
-    imTextSpan,
+    imNextListRoot,
 } from "src/utils/im-utils-core";
+import {
+    imBeginDiv,
+    elementHasMousePress,
+    setText,
+} from "src/utils/im-utils-dom";
 
 function newButton() {
     return document.createElement("button");
@@ -21,10 +19,6 @@ function newButton() {
 
 function newH3() {
     return document.createElement("h3");
-}
-
-function newInput() {
-    return document.createElement("input");
 }
 
 function appState(): {
@@ -41,13 +35,13 @@ function appState(): {
 }
 
 function App() {
-    const s = imGetState(appState);
+    const s = imGetStateFromFn(appState);
 
-    imBeginRoot(newH3); setInnerText("TODO list"); imEnd();
+    imBeginRoot(newH3); setText("TODO list"); imEnd();
 
     imBeginDiv(); {
         imBeginRoot(newButton); {
-            setInnerText("Add");
+            setText("Add");
             if (elementHasMousePress()) {
                 s.todoListItems.push({
                     id: (s.lastId++).toString(),
@@ -58,12 +52,8 @@ function App() {
     } imEnd();
     imBeginDiv(); {
         imFor(); for (const item of s.todoListItems) {
-            // Don't actually need to use item.id as the key here. 
-            // re-ordering DOM nodes can be more expensive than just setting new text.
-            nextListRoot(item.id); 
-            imBeginDiv(); {
-                imTextSpan(item.text);
-            } imEnd();
+            imNextListRoot(item); 
+            imBeginDiv(); setText(item.text); imEnd();
         } imEndFor();
     } imEnd();
 }

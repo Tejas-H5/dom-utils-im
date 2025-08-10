@@ -6,10 +6,12 @@ import {
     ImCore,
     imInit,
     imGetState,
-    nextTypeId,
     rerenderImCore,
     UIRoot,
-    ValidElement
+    ValidElement,
+    imSetState,
+    inlineTypeId,
+    imGetStateRef
 } from "./im-utils-core";
 
 export type DomAppender<E extends ValidElement = ValidElement> = { root: E; idx: number; };
@@ -370,7 +372,7 @@ export function setClass(val: string, enabled: boolean | number = true, r = getC
  * This is usually not enough. You're better off making a text abstraction.
  */
 export function setText(text: string, r = getCurrentRoot()) {
-    if (r.hasRealChildren === true) throw new Error("But think about the children! (Don't overwrite them with text)");
+    if (r.hasRealChildren === true) throw new Error("You are about to overwrite actual DOM nodes with some text ...");
     if (r.elementSupplier === null) throw new Error("You probably didn't want to call this on a list root");
 
     // While this is a performance optimization, we also kinda need to do this - 
@@ -414,10 +416,9 @@ export function getAttr(k: string, r = getCurrentRoot()) : string {
 }
 
 export function imIsOnScreen() {
-    const isOnScreenRef = imGetState(TYPEID_imIsOnScreen);
-    if (isOnScreenRef.v === undefined) {
+    let state; state = imGetState(inlineTypeId(imIsOnScreen))
+    if (state === undefined) {
         const r = getCurrentRoot();
-
         const self = {
             isOnScreen: false,
             observer: new IntersectionObserver((entries) => {
@@ -432,17 +433,16 @@ export function imIsOnScreen() {
         self.observer.observe(r.root);
         core.numIntersectionObservers++;
 
-        addDestructor(r, () => {
+        addDestructor(() => {
             core.numIntersectionObservers--;
             self.observer.disconnect()
-        });
+        }, r);
 
-        isOnScreenRef.v = self;
+        state = imSetState(self);
     }
 
-    return isOnScreenRef.v.isOnScreen;
+    return state.isOnScreen;
 }
-const TYPEID_imIsOnScreen = nextTypeId<{ isOnScreen: boolean; observer: IntersectionObserver; }>();
 
 
 export function addClasses(classes: string[]) {
@@ -465,10 +465,9 @@ export function setStyle<K extends (keyof ValidElement["style"])>(key: K, value:
 // Realtime immediate-mode events API
 
 
-const TYPEID_ImTrackSize = nextTypeId<{ width: number; height: number; resized: boolean; observer: ResizeObserver; }>();
 export function imTrackSize() {
-    const ref = imGetState(TYPEID_ImTrackSize);
-    if (ref.v === undefined) {
+    let ref; ref = imGetState(inlineTypeId(imTrackSize));
+    if (ref === undefined) {
         const r = getCurrentRoot();
         const core = getImCore();
 
@@ -490,12 +489,12 @@ export function imTrackSize() {
 
         self.observer.observe(r.root);
         core.numResizeObservers++;
-        addDestructor(r, () => {
+        addDestructor(() => {
             core.numResizeObservers--;
             self.observer.disconnect()
-        });
+        }, r);
 
-        ref.v = self;
+        ref = imSetState(self);
     };
 
     return self;
@@ -589,14 +588,14 @@ export function setClickedElement(mouse: ImMouseState, el: object | null) {
  * event types as integer enums, which should fix this issue. 
  */
 export function imOn<K extends keyof HTMLElementEventMap>(type: K): HTMLElementEventMap[K] | null {
-    const eventRef = imGetState<HTMLElementEventMap[K]>(TYPEID_imOn);
+    const eventRef = imGetStateRef<HTMLElementEventMap[K]>(imOn);
     const core = getImCore();
 
     if (imInit() === true) {
         const r = getCurrentRoot();
 
         const handler = (e: HTMLElementEventMap[K]) => {
-            eventRef.v = e;
+            eventRef.val = e;
             rerenderImCore(core, core.lastTime, true);
         }
         r.root.addEventListener(
@@ -607,7 +606,7 @@ export function imOn<K extends keyof HTMLElementEventMap>(type: K): HTMLElementE
 
         core.numEventHandlers++;
 
-        addDestructor(r, () => {
+        addDestructor(() => {
             core.numEventHandlers--;
 
             r.root.removeEventListener(
@@ -615,24 +614,23 @@ export function imOn<K extends keyof HTMLElementEventMap>(type: K): HTMLElementE
                 // @ts-expect-error this thing is fine, actually.
                 handler
             );
-        });
+        }, r);
     }
 
     let result: HTMLElementEventMap[K] | null =  null;
 
-    if (eventRef.v !== undefined) {
-        result = eventRef.v;
-        eventRef.v = undefined;
+    if (eventRef.val !== undefined) {
+        result = eventRef.val;
+        eventRef.val = undefined;
     }
 
     return result;
 }
-const TYPEID_imOn = nextTypeId();
+
 export function imPreventScrollEventPropagation(mouse: ImMouseState) {
-    const ref = imGetState(TYPEID_imPreventScrollEventPropagation);
-    if (ref.v === undefined) {
+    let ref; ref = imGetState(inlineTypeId(imPreventScrollEventPropagation));
+    if (ref === undefined) {
         const state = { isBlocking: true, scrollY: 0 };
-        ref.v = state;
 
         const r = getCurrentRoot();
 
@@ -645,23 +643,24 @@ export function imPreventScrollEventPropagation(mouse: ImMouseState) {
         }
 
         r.root.addEventListener("wheel", handler);
-        addDestructor(r, () => r.root.removeEventListener("wheel", handler))
+        addDestructor(() => r.root.removeEventListener("wheel", handler), r)
+
+        ref = imSetState(state);
     }
 
     if (
-        ref.v.isBlocking === true && 
+        ref.isBlocking === true && 
         elementHasMouseHover(mouse) && 
         mouse.scrollWheel !== 0
     ) {
-        ref.v.scrollY += mouse.scrollWheel;
+        ref.scrollY += mouse.scrollWheel;
         mouse.scrollWheel = 0;
     } else {
-        ref.v.scrollY = 0;
+        ref.scrollY = 0;
     }
 
     return ref;
 }
-const TYPEID_imPreventScrollEventPropagation = nextTypeId<{ isBlocking: boolean, scrollY: number; }>();
 
 
 export function resetKeyboardState(keyboard: ImKeyboardState) {

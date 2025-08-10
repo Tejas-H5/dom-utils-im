@@ -19,7 +19,8 @@ import {
     imNextListRoot,
     getImCore,
     imIsFirstishRender,
-    nextTypeId,
+    imSetState,
+    imGetStateRef,
     inlineTypeId,
 } from "src/utils/im-utils-core";
 import {
@@ -38,6 +39,7 @@ import {
     initCssbStyles,
     newCssBuilder
 } from "src/utils/cssb";
+import { imA, imS } from "src/components/text";
 
 function newButton() {
     return document.createElement("button");
@@ -102,12 +104,12 @@ function newWallClockState() {
 function WallClock() {
     const dt = getDeltaTimeSeconds();
 
-    const s = imGetState<number>(inlineTypeId(5699140285007203));
-    if (s.v === undefined) s.v = 0;
+    let s = imGetState(Math.random);
+    if (s === undefined) s = imSetState(0);
 
-    s.v += (-0.5 + Math.random()) * 0.02;
-    if (s.v > 1) s.v = 1;
-    if (s.v < -1) s.v = -1;
+    s += (-0.5 + Math.random()) * 0.02;
+    if (s > 1) s = 1;
+    if (s < -1) s = -1;
 
     // The retained-mode code is actually more compact here!
     imBeginDiv(); {
@@ -119,13 +121,14 @@ function WallClock() {
         } imEnd();
     } imEnd();
     imBeginDiv(); {
-        setText("brownian motion: " + s.v + "");
+        setText("brownian motion: " + s + "");
     } imEnd();
     imBeginDiv(); {
         setText("FPS: " + (1 / dt).toPrecision(2) + "");
     } imEnd();
 
-    let n = s.v < 0 ? 1 : 2;
+    let n = s < 0 ? 1 : 2;
+    n = 2; // TODO: revert
     imFor(); for (let i = 0; i < n; i++) {
         imNextListRoot(); 
 
@@ -346,15 +349,20 @@ const cnGridTile = cssb.cn("grid-tile", [
 ]);
 
 function imApp() {
-    const errRef = imGetState<any>(__line__);
+    let errRef; errRef = imGetState(inlineTypeId<{ val: any }>(imApp));
+    if (!errRef) errRef = imSetState({ val: null });
+
 
     // If only we can do this withouta typeId or a fn pointer?
-    const s = imGetState(newAppState);
+    let s = imGetState(newAppState);
+    if (!s) s = imSetState(newAppState());
 
     const l = imTry(); try {
         if (imIf() && !errRef.val) {
 
-            const fps = imGetState(newFpsCounterState);
+            let fps = imGetState(newFpsCounterState);
+            if (!fps) fps = newFpsCounterState();
+
             startPerfTimer(fps);
             imPerfTimerOutput(fps);
 
@@ -425,9 +433,9 @@ function imApp() {
                 }
 
                 const n = 20;
-                const pingPong = imGetState(() => {
-                    return { pos: 0, dir: 1 };
-                }, true);
+                let pingPong; pingPong = imGetState(inlineTypeId(imBeginDiv));
+                if (!pingPong) pingPong = imSetState({ pos: 0, dir: 1 });
+
                 if (pingPong.pos === 0) {
                     pingPong.dir = 1;
                 } else if (pingPong.pos === n) {
@@ -454,7 +462,9 @@ function imApp() {
                 } imEndFor();
             } imEnd();
             
-            const gridState = imGetState(newGridState);
+            let gridState = imGetState(newGridState);
+            if (!gridState) gridState = imSetState(newGridState());
+
             if (imIf() && s.grid) {
                 const dt = getDeltaTimeSeconds();
                 const { values, gridRows, gridCols } = gridState;

@@ -69,5 +69,7 @@ The problem also still exists for normal im nodes, but I've never encountered it
 immediate mode patterns when I'm doing UI. It's just these other places. I've added disableIm() and enableIm() just for this.
 I can't help but thing there is a simpler and more elegant solution.
 
+For now, I reckon I'll just gate imMemo with a typeId, and nothing else. 
+
 
 	 
