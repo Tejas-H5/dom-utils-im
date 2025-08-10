@@ -48,6 +48,7 @@ export type ImCore = {
     appRoot:       UIRoot;
 
     currentStack:    (UIRoot | ListRenderer)[];
+    stackIdx: number;
     topOfStack: UIRoot | ListRenderer | undefined;
 
     imDisabled:       boolean;
@@ -122,7 +123,8 @@ export function newImCore(root: HTMLElement = document.body): ImCore {
         uninitialized: false,
         appRoot: newUiRoot(() => root),
 
-        currentStack: [],
+        currentStack: Array(8192).fill(null),
+        stackIdx: -1,
         topOfStack:   undefined,
 
         imDisabled: false,
@@ -280,7 +282,8 @@ function __beginUiRoot(r: UIRoot, startDomIdx: number, startItemIdx: number, par
     r.itemsIdx = startItemIdx;
     r.parentRoot = parent;
 
-    imCore.currentStack.push(r);
+    const stackIdx = ++imCore.stackIdx;
+    imCore.currentStack[stackIdx] = r;
     imCore.topOfStack = r;
 }
 
@@ -402,7 +405,9 @@ function __beginListRenderer(l: ListRenderer) {
         }
     }
     l.current = null;
-    imCore.currentStack.push(l);
+
+    const stackIdx = ++imCore.stackIdx;
+    imCore.currentStack[stackIdx] = l;
     imCore.topOfStack = l;
 }
 
@@ -923,16 +928,20 @@ export function getCurrentListRendererInternal(): ListRenderer {
     return imCore.topOfStack;
 }
 
-export function imUnappendedRoot<E extends ValidElement = ValidElement>(
-    elementSupplier: () => E,
-    r: UIRoot<ValidElement>
-): UIRoot<E> {
+/**
+const cssb = newCssBuilder("debug");
+const debugClass = cssb.cn("debug1pxSolidRed", [` { border: 1px solid red; }`]);
+// */
+
+export function imBeginRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
     hasDomDependency;
+
+    const parent = getCurrentRoot();
 
     const core = imCore;
 
-    const items = r.items;
-    const idx = getNextItemSlotIdx(r, core);
+    const items = parent.items;
+    const idx = getNextItemSlotIdx(parent, core);
 
     let result: UIRoot<E> | undefined;
     if (idx < items.length) {
@@ -953,29 +962,10 @@ export function imUnappendedRoot<E extends ValidElement = ValidElement>(
 
     core.itemsRendered++;
 
-    return result as UIRoot<E>;
-} 
+    appendToDomRoot(parent.domAppender, result.domAppender.root);
 
+    __beginUiRoot(result, -1, -1, parent);
 
-/**
-const cssb = newCssBuilder("debug");
-const debugClass = cssb.cn("debug1pxSolidRed", [` { border: 1px solid red; }`]);
-// */
-
-export function imBeginExistingRoot<E extends ValidElement = ValidElement>(
-    root: UIRoot<E>,
-    parent: UIRoot<ValidElement>
-) {
-    appendToDomRoot(parent.domAppender, root.domAppender.root);
-    __beginUiRoot(root, -1, -1, parent);
-}
-
-export function imBeginRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
-    hasDomDependency;
-
-    const r = getCurrentRoot();
-    const result = imUnappendedRoot(elementSupplier, r);
-    imBeginExistingRoot(result, r);
     return result;
 }
 
@@ -996,22 +986,20 @@ export function imEnd(removeLevel: RemovedLevel = REMOVE_LEVEL_DETATCHED, r: UIR
 
     if (r.itemsIdx === -1) {
         __removeAllDomElementsFromUiRoot(r, removeLevel);
+    } else {
+        if (r.itemsIdx !== r.items.length - 1) throw new Error("A different number of immediate mode state entries were pushed this render. You may be doing conditional rendering in a way that is invisible to this framework. See imIf, imElseIf, imElse, imSwitch, imFor, imWhile, imList, imNextListRoot, etc. for some alternatives.");
     }
-
-    if (r.itemsIdx !== -1 && r.itemsIdx !== r.items.length - 1) throw new Error("A different number of immediate mode state entries were pushed this render. You may be doing conditional rendering in a way that is invisible to this framework. See imIf, imElseIf, imElse, imSwitch, imFor, imWhile, imList, imNextListRoot, etc. for some alternatives.");
 }
 
 
 function __popStack() {
     const core = imCore;
 
-    // fix the `current` variables
-    core.currentStack.pop();
-    core.topOfStack 
-    if (core.currentStack.length === 0) {
+    const stackIdx = --core.stackIdx;
+    if (stackIdx < 0) {
         core.topOfStack = undefined;
     } else {
-        core.topOfStack = core.currentStack[core.currentStack.length - 1];
+        core.topOfStack = core.currentStack[stackIdx];
     }
 }
 
@@ -1068,9 +1056,9 @@ export function abortListAndRewindUiStack(l: ListRenderer) {
     const core = imCore;
 
     // need to wind the stack back to the current list component
-    const idx = core.currentStack.lastIndexOf(l);
+    const idx = core.currentStack.lastIndexOf(l, core.stackIdx);
     if (idx === -1) throw new Error("Expected this list element to be on the current element stack");
-    core.currentStack.length = idx + 1;
+    core.stackIdx = idx;
     core.topOfStack = l;
 
     const r = l.current;
@@ -1314,7 +1302,7 @@ export function rerenderImCore(core: ImCore, t: number, isInsideEvent: boolean) 
     // begin frame
 
     core.isRendering = true;
-    core.currentStack.length = 0;
+    core.stackIdx = -1;
 
     imEnable();
 
@@ -1339,11 +1327,11 @@ export function rerenderImCore(core: ImCore, t: number, isInsideEvent: boolean) 
         core._isExcessEventRender = isInsideEvent;
     }
 
-    if (core.currentStack.length !== 0) {
+    if (core.stackIdx !== -1) {
         const message = "You forgot to pop some things off the stack: ";
         console.error(message, core.currentStack.slice(1));
         throw new Error(`${message}
-        ${core.currentStack.slice(1).map(item => {
+        ${core.currentStack.slice(0, core.stackIdx + 1).map(item => {
             if (item.t === ITEM_LIST_RENDERER) {
                 return "List renderer"
             } else {

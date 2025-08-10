@@ -369,7 +369,7 @@ function imApp() {
             startPerfTimer(fps);
             imPerfTimerOutput(fps);
 
-            imBeginDiv(); {
+            const row = imBeginDiv(); {
                 imButton("Click me!", () => {
                     alert("noo");
                 });
@@ -477,7 +477,7 @@ function imApp() {
                 imFor(); for (let row = 0; row < gridRows; row++) {
                     imNextListRoot();
 
-                    imBeginDiv(); {
+                    imBeginDiv(); 
                         if (imIsFirstishRender()) {
                             setAttr("style", "display: flex;");
                         }
@@ -514,7 +514,7 @@ function imApp() {
                                 } 
                             } imEnd();
                         } imEndFor();
-                    } imEnd();
+                     imEnd();
                 } imEndFor();
             } else if (imElseIf() && s.grid === GRID_MOST_OPTIMAL) {
                 imBeginDiv(); imText("[Theoretical best performance upperbound with our current approach]  Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
