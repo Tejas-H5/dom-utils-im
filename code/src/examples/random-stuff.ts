@@ -20,11 +20,9 @@ import {
     getImCore,
     imIsFirstishRender,
     imSetState,
-    imGetStateRef,
     inlineTypeId,
 } from "src/utils/im-utils-core";
 import {
-    setText,
     setClass,
     setAttr,
     setStyle,
@@ -33,14 +31,13 @@ import {
     elementHasMousePress,
     elementHasMouseHover,
     getImMouse,
-    removeDocumentAndWindowEventListeners,
+    imText,
 } from "src/utils/im-utils-dom";
 import {
     cn,
     initCssbStyles,
     newCssBuilder
 } from "src/utils/cssb";
-import { imA, imS } from "src/components/text";
 
 function newButton() {
     return document.createElement("button");
@@ -51,7 +48,7 @@ function imButton(buttonText: string, onClick: () => void) {
 
     imBeginDiv(); {
         button = imBeginRoot(newButton); {
-            setText(buttonText);
+            imText(buttonText);
 
             if (elementHasMousePress()) {
                 onClick();
@@ -74,7 +71,7 @@ function Slider(labelText: string, onChange: (val: number) => void) {
     const root = imBeginDiv(); {
         imBeginRoot(newLabel); {
             setAttr("for", labelText);
-            setText(labelText);
+            imText(labelText);
         }; imEnd();
         const input = imBeginRoot<HTMLInputElement>(newInput); {
             if (imInit()) {
@@ -116,16 +113,16 @@ function WallClock() {
     imBeginDiv(); {
         imBeginDiv(); {
             const r = getCurrentRoot();
-            setText("Removed: " + r.removeLevel);
-            setText("In conditional path: " + r.isInConditionalPathway);
+            imText("Removed: " + r.removeLevel);
+            imText("In conditional path: " + r.isInConditionalPathway);
             imMemo(1);
         } imEnd();
     } imEnd();
     imBeginDiv(); {
-        setText("brownian motion: " + s + "");
+        imText("brownian motion: " + s + "");
     } imEnd();
     imBeginDiv(); {
-        setText("FPS: " + (1 / dt).toPrecision(2) + "");
+        imText("FPS: " + (1 / dt).toPrecision(2) + "");
     } imEnd();
 
     let n = s < 0 ? 1 : 2;
@@ -134,7 +131,7 @@ function WallClock() {
         imNextListRoot(); 
 
         imBeginDiv();  {
-            setText(new Date().toISOString());
+            imText(new Date().toISOString());
         } imEnd();
     } imEndFor();
 }
@@ -323,16 +320,16 @@ function imPerfTimerOutput(fps: FpsCounterState) {
 
         // r.text(screenHz + "hz screen, " + renderHz + "hz code");
 
-        imBeginSpan(); setText(fps.baselineLocked ? (fps.baselineFrameMs + "ms baseline, ") : "computing baseline..."); imEnd();
+        imBeginSpan(); imText(fps.baselineLocked ? (fps.baselineFrameMs + "ms baseline, ") : "computing baseline..."); imEnd();
 
-        imBeginSpan(); setText(fps.framesMsRounded + "ms frame, "); imEnd();
+        imBeginSpan(); imText(fps.framesMsRounded + "ms frame, "); imEnd();
 
         imBeginSpan(); {
             const fpsChanged = imMemo(fps.renderMsRounded);
             if (fpsChanged) {
                 setStyle("color", fps.renderMsRounded / fps.baselineFrameMs > 0.5 ? "red" : "");
             } 
-            setText(fps.renderMsRounded + "ms render");
+            imText(fps.renderMsRounded + "ms render");
         } imEnd();
         // setStyle("transform", "rotate(" + angle + "deg)");
 
@@ -341,7 +338,7 @@ function imPerfTimerOutput(fps: FpsCounterState) {
         }
 
         const core = getImCore();
-        imBeginSpan(); setText("Items rendered: " + core.itemsRenderedLastFrame); imEnd();
+        imBeginSpan(); imText("Items rendered: " + core.itemsRenderedLastFrame); imEnd();
 
     } imEnd();
 }
@@ -377,35 +374,35 @@ function imApp() {
                     alert("noo");
                 });
                 imBeginDiv(); {
-                    setText("Hello world! ");
+                    imText("Hello world! ");
                 }
                 imEnd();
                 imBeginDiv(); {
-                    setText("Lets goo");
+                    imText("Lets goo");
                 }
                 imEnd();
                 imBeginDiv(); {
-                    setText("Count: " + s.count);
+                    imText("Count: " + s.count);
                 }
                 imEnd();
                 imBeginDiv(); {
-                    setText("Period: " + s.period);
+                    imText("Period: " + s.period);
                 }
                 imEnd();
 
                 // sheesh. cant win with these people...
                 if (imIf() && s.count > 1000) {
                     imBeginDiv(); {
-                        setText("The count is too damn high!!");
+                        imText("The count is too damn high!!");
                     } imEnd();
                 } else if (imElseIf() && s.count < 1000) {
                     imBeginDiv(); {
-                        setText("The count is too damn low !!");
+                        imText("The count is too damn low !!");
                     } imEnd();
                 } else { 
                     imElse();
                     imBeginDiv(); {
-                        setText("The count is too perfect!!");
+                        imText("The count is too perfect!!");
                     } imEnd();
                 } imEndIf();
                 imBeginDiv(); {
@@ -475,7 +472,7 @@ function imApp() {
                 const dt = getDeltaTimeSeconds();
                 const { values, gridRows, gridCols } = gridState;
 
-                imBeginDiv(); setText("Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
+                imBeginDiv(); imText("Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
 
                 imFor(); for (let row = 0; row < gridRows; row++) {
                     imNextListRoot();
@@ -520,9 +517,10 @@ function imApp() {
                     } imEnd();
                 } imEndFor();
             } else if (imElseIf() && s.grid === GRID_MOST_OPTIMAL) {
-                imBeginDiv(); setText("[Theoretical best performance upperbound with our current approach]  Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
+                imBeginDiv(); imText("[Theoretical best performance upperbound with our current approach]  Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
 
                 const root = imBeginDiv(); {
+                    root.domAppender.manualDom = true;
                     const dt = getDeltaTimeSeconds();
                     const { values, gridRows, gridCols } = gridState;
 
@@ -634,11 +632,11 @@ function imApp() {
                     }
 
                     imBeginDiv(); {
-                        setText("An error occured: " + errRef.val);
+                        imText("An error occured: " + errRef.val);
                     }
                     imEnd();
                     imBeginDiv(); {
-                        setText("Click below to retry.")
+                        imText("Click below to retry.")
                     }
                     imEnd();
 

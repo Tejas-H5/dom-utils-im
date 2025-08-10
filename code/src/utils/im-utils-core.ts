@@ -36,7 +36,7 @@ import { newCssBuilder } from "./cssb";
 "use strict";
 
 // TODO: remove/invert dependency
-import { addDocumentAndWindowEventListeners, appendToDomRoot, beginProcessingImEvent, bubbleMouseEvents, DomAppender, endProcessingImEvent, ImGlobalEventSystem, newImGlobalEventSystem, removeDocumentAndWindowEventListeners, setClass } from "./im-utils-dom";
+import { addDocumentAndWindowEventListeners, appendToDomRoot, beginProcessingImEvent, bubbleMouseEvents, DomAppender, endProcessingImEvent, finalizeDomAppender, ImGlobalEventSystem, newDomAppender, newImGlobalEventSystem, removeDocumentAndWindowEventListeners, setClass } from "./im-utils-dom";
 
 export function hasDomDependency() { /** This code as a dependency on DOM */ };
 
@@ -48,10 +48,7 @@ export type ImCore = {
     appRoot:       UIRoot;
 
     currentStack:    (UIRoot | ListRenderer)[];
-
-    // Only one of these is defined at a time.
-    currentRoot:         UIRoot | undefined;
-    currentListRenderer: ListRenderer | undefined;
+    topOfStack: UIRoot | ListRenderer | undefined;
 
     imDisabled:       boolean;
     imDisabledReason: string;
@@ -126,8 +123,7 @@ export function newImCore(root: HTMLElement = document.body): ImCore {
         appRoot: newUiRoot(() => root),
 
         currentStack: [],
-        currentRoot: undefined,
-        currentListRenderer: undefined,
+        topOfStack:   undefined,
 
         imDisabled: false,
         imDisabledReason: "",
@@ -192,7 +188,6 @@ export type UIRoot<E extends ValidElement = ValidElement> = {
     itemsIdx: number;
     lastItemIdx: number; // TODO: delete. wtf is this even?
 
-    hasRealChildren:    boolean; // can we add text to this element ?
     completedOneRender: boolean; // have we completed at least one render without erroring?
     parentRoot: UIRoot<ValidElement> | null;
     parentListRenderer: ListRenderer | null;
@@ -250,7 +245,7 @@ export function newUiRoot<E extends ValidElement>(
     if (domAppender === null) {
         if (supplier === null) throw new Error("Expected supplier to be present if domAppender was null");
         root = supplier();
-        domAppender = { root, idx: -1 };
+        domAppender = newDomAppender(root);
     } else {
         // If there was no supplier, then this root is attached to the same DOM element as another UI root that does have a supplier.
         if (domAppender === null) throw new Error("Expected domAppender to be present if supplier was null");
@@ -266,7 +261,6 @@ export function newUiRoot<E extends ValidElement>(
         items: [],
         itemsIdx: -1,
         lastItemIdx: -1,
-        hasRealChildren: false,
 
         removeLevel: REMOVE_LEVEL_DETATCHED,
         parentRoot: null,
@@ -287,8 +281,7 @@ function __beginUiRoot(r: UIRoot, startDomIdx: number, startItemIdx: number, par
     r.parentRoot = parent;
 
     imCore.currentStack.push(r);
-    imCore.currentRoot = r;
-    imCore.currentListRenderer = undefined;
+    imCore.topOfStack = r;
 }
 
 // Recursively destroys all UI roots under this one.
@@ -409,7 +402,8 @@ function __beginListRenderer(l: ListRenderer) {
         }
     }
     l.current = null;
-    pushList(l);
+    imCore.currentStack.push(l);
+    imCore.topOfStack = l;
 }
 
 
@@ -703,8 +697,8 @@ export function imEndTry() {
  * See the {@link UIRoot} docs for more info on what a 'UIRoot' even is, what it's limitations are, and how to effectively (re)-use them.
  */
 export function imNextListRoot(key?: ValidKey) {
-    if (imCore.currentRoot !== undefined) {
-        const root = imCore.currentRoot;
+    if (imCore.topOfStack !== undefined && imCore.topOfStack.t === ITEM_UI_ROOT) {
+        const root = imCore.topOfStack;
         if (root.parentListRenderer === null) throw new Error("Expected this root to have a list renderer");
         imEnd(root.parentListRenderer.cacheRemoveLevel, root);
     }
@@ -911,34 +905,22 @@ export function imSetState<T>(val: T): T {
  * Mainly for use when you don't care what the type of the root is.
  */
 export function getCurrentRoot(): UIRoot {
-    const core = imCore;
-
     /** 
      * Can't call this method without opening a new UI root. Common mistakes include: 
      *  - using end() instead of endList() to end lists
      *  - calling beginList() and then rendering a component without wrapping it in nextRoot like `nextRoot(); { ...component code... } end();`
      */
-    if (core.currentRoot === undefined) throw new Error("You may be rendering a list right now, in which case calling this method is invalid");
-
-    return core.currentRoot;
+    if (imCore.topOfStack === undefined) throw new Error("Nothing to get");
+    if (imCore.topOfStack.t !== ITEM_UI_ROOT) throw new Error("You may be rendering a list right now");
+    return imCore.topOfStack;
 }
 
 // You probably don't want to use this, if you can help it
 export function getCurrentListRendererInternal(): ListRenderer {
-    const core = imCore;
-
     /** Can't call this method without opening a new list renderer (see {@link imBeginList}) */
-    if (core.currentListRenderer === undefined) throw new Error("You may be rendering a UIRoot now, in which case calling this method is invalid");
-
-    return core.currentListRenderer;
-}
-
-function pushList(l: ListRenderer) {
-    const core = imCore;
-
-    core.currentStack.push(l);
-    core.currentRoot = undefined;
-    core.currentListRenderer = l;
+    if (imCore.topOfStack === undefined) throw new Error("Nothing to get");
+    if (imCore.topOfStack.t !== ITEM_LIST_RENDERER) throw new Error("You are not be rendering a list right now ...");
+    return imCore.topOfStack;
 }
 
 export function imUnappendedRoot<E extends ValidElement = ValidElement>(
@@ -984,10 +966,7 @@ export function imBeginExistingRoot<E extends ValidElement = ValidElement>(
     root: UIRoot<E>,
     parent: UIRoot<ValidElement>
 ) {
-    parent.hasRealChildren = true;
-
     appendToDomRoot(parent.domAppender, root.domAppender.root);
-
     __beginUiRoot(root, -1, -1, parent);
 }
 
@@ -1005,7 +984,11 @@ export function imBeginRoot<E extends ValidElement = ValidElement>(elementSuppli
  * This is called `imEnd` instad of `end`, because `end` is a good variable name that we don't want to squat on.
  */
 export function imEnd(removeLevel: RemovedLevel = REMOVE_LEVEL_DETATCHED, r: UIRoot = getCurrentRoot()) {
-    bubbleMouseEvents(r, imCore.imEventSystem);
+    if (r.elementSupplier !== null) {
+        finalizeDomAppender(r.domAppender);
+
+        bubbleMouseEvents(r, imCore.imEventSystem);
+    }
 
     __popStack();
 
@@ -1024,24 +1007,17 @@ function __popStack() {
 
     // fix the `current` variables
     core.currentStack.pop();
+    core.topOfStack 
     if (core.currentStack.length === 0) {
-        core.currentRoot = undefined;
-        core.currentListRenderer = undefined;
+        core.topOfStack = undefined;
     } else {
-        const val = core.currentStack[core.currentStack.length - 1];
-        if (val.t === ITEM_LIST_RENDERER) {
-            core.currentListRenderer = val;
-            core.currentRoot = undefined;
-        } else {
-            core.currentListRenderer = undefined;
-            core.currentRoot = val;
-        }
+        core.topOfStack = core.currentStack[core.currentStack.length - 1];
     }
 }
 
 export function imEndList() {
-    if (imCore.currentRoot !== undefined) {
-        const root = imCore.currentRoot;
+    if (imCore.topOfStack !== undefined && imCore.topOfStack.t === ITEM_UI_ROOT) {
+        const root = imCore.topOfStack;
         if (root.parentListRenderer === null) throw new Error("Expected this root to have a list renderer");
         imEnd(root.parentListRenderer.cacheRemoveLevel, root);
     }
@@ -1095,8 +1071,7 @@ export function abortListAndRewindUiStack(l: ListRenderer) {
     const idx = core.currentStack.lastIndexOf(l);
     if (idx === -1) throw new Error("Expected this list element to be on the current element stack");
     core.currentStack.length = idx + 1;
-    core.currentRoot = undefined;
-    core.currentListRenderer = l;
+    core.topOfStack = l;
 
     const r = l.current;
     if (r !== null) {
@@ -1340,7 +1315,9 @@ export function rerenderImCore(core: ImCore, t: number, isInsideEvent: boolean) 
 
     core.isRendering = true;
     core.currentStack.length = 0;
+
     imEnable();
+
     __beginUiRoot(core.appRoot, -1, -1, null);
 
     beginProcessingImEvent(core.imEventSystem);
@@ -1350,6 +1327,8 @@ export function rerenderImCore(core: ImCore, t: number, isInsideEvent: boolean) 
     core.renderFn();
 
     // end frame
+    
+    imEnd();
 
     endProcessingImEvent(core.imEventSystem);
 
@@ -1360,22 +1339,18 @@ export function rerenderImCore(core: ImCore, t: number, isInsideEvent: boolean) 
         core._isExcessEventRender = isInsideEvent;
     }
 
-    if (core.currentStack.length !== 1) {
-        if (core.currentStack.length < 1) {
-            throw new Error("You've popped too many things off the stack. There is no good way to find the bug right now, sorry");
-        } else {
-            const message = "You forgot to pop some things off the stack: ";
-            console.error(message, core.currentStack.slice(1));
-            throw new Error(`${message}
-            ${core.currentStack.slice(1).map(item => {
-                if (item.t === ITEM_LIST_RENDERER) {
-                    return "List renderer"
-                } else {
-                    return "UI Root - " + item.root.tagName;
-                }
-            }).join("\n")}`
-            );
-        }
+    if (core.currentStack.length !== 0) {
+        const message = "You forgot to pop some things off the stack: ";
+        console.error(message, core.currentStack.slice(1));
+        throw new Error(`${message}
+        ${core.currentStack.slice(1).map(item => {
+            if (item.t === ITEM_LIST_RENDERER) {
+                return "List renderer"
+            } else {
+                return "UI Root - " + item.root.tagName;
+            }
+        }).join("\n")}`
+        );
     }
 }
 

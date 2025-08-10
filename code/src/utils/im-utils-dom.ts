@@ -14,7 +14,53 @@ import {
     imGetStateRef
 } from "./im-utils-core";
 
-export type DomAppender<E extends ValidElement = ValidElement> = { root: E; idx: number; };
+type AppendableElement = (ValidElement | Text);
+export type DomAppender<E extends ValidElement = ValidElement> = {
+    root: E; 
+    idx: number;
+    children: AppendableElement[];
+    lastIdx: number;
+    childrenChanged: boolean;
+    manualDom: boolean;
+};
+
+export function newDomAppender<E extends ValidElement>(root: E): DomAppender<E> {
+    return {
+        root,
+        idx: -1,
+        children: [],
+        lastIdx: -2,
+        childrenChanged: false,
+        manualDom: false,
+    };
+}
+
+export function finalizeDomAppender(appender: DomAppender<ValidElement>) {
+    if (
+        appender.manualDom === false && 
+        (appender.childrenChanged === true || appender.idx !== appender.lastIdx)
+    ) {
+        // TODO: measure perf impacts.
+        // TODO: consider clear, then replace children.
+        appender.root.replaceChildren(...appender.children.slice(0, appender.idx + 1));
+        appender.childrenChanged = false;
+        appender.lastIdx = appender.idx;
+    }
+}
+
+export function appendToDomRoot(domAppender: DomAppender, child: AppendableElement) {
+    const i = ++domAppender.idx;
+    if (i < domAppender.children.length) {
+        if (domAppender.children[i] !== child) {
+            domAppender.childrenChanged = true;
+            domAppender.children[i] = child;
+        }
+    } else {
+        domAppender.children.push(child);
+        domAppender.childrenChanged = true;
+    }
+}
+
 
 export type KeyPressEvent = {
     key: string;
@@ -345,18 +391,6 @@ export function getElementExtentNormalized(scrollParent: HTMLElement, scrollTo: 
 
 
 
-export function appendToDomRoot(domAppender: DomAppender, child: ValidElement) {
-    const i = ++domAppender.idx;
-    const root = domAppender.root;
-
-    const children = root.children;
-    if (i === children.length) {
-        root.appendChild(child);
-    } else if (children[i] !== child) {
-        root.insertBefore(child, children[i]);
-    }
-}
-
 export function setClass(val: string, enabled: boolean | number = true, r = getCurrentRoot()): boolean {
     if (enabled !== false && enabled !== 0) {
         r.root.classList.add(val);
@@ -365,34 +399,6 @@ export function setClass(val: string, enabled: boolean | number = true, r = getC
     }
 
     return !!enabled;
-}
-
-/**
- * NOTE: this method is not ideal - it can only manage a single text node under a DOM element at a time.
- * This is usually not enough. You're better off making a text abstraction.
- */
-export function setText(text: string, r = getCurrentRoot()) {
-    if (r.hasRealChildren === true) throw new Error("You are about to overwrite actual DOM nodes with some text ...");
-    if (r.elementSupplier === null) throw new Error("You probably didn't want to call this on a list root");
-
-    // While this is a performance optimization, we also kinda need to do this - 
-    // otherwise, if we're constantly mutating the text, we can never select it!
-    if (r.lastText !== text) {
-        r.lastText = text;
-        setTextSafetyRemoved(text);
-    }
-}
-
-/**
- * Use this if you are already memoizing the text somehow on your end
- */
-export function setTextSafetyRemoved(text: string, r = getCurrentRoot()) {
-    if (r.root.childNodes.length === 0) {
-        r.root.appendChild(document.createTextNode(text));
-    } else {
-        const textNode = r.root.childNodes[0];
-        textNode.nodeValue = text;
-    }
 }
 
 export function setAttrElement(e: ValidElement, attr: string, val: string | null) {
@@ -734,21 +740,36 @@ export function endProcessingImEvent(eventSystem: ImGlobalEventSystem) {
 }
 
 export function bubbleMouseEvents(r: UIRoot, eventSystem: ImGlobalEventSystem) {
-    const notDerived = r.elementSupplier !== null;
-    if (notDerived) {
-        // Defer the mouse events upwards, so that parent elements can handle it if they want
-        const el = r.root;
-        const parent = el.parentNode;
+    // Defer the mouse events upwards, so that parent elements can handle it if they want
+    const el = r.root;
 
-        const mouse = eventSystem.mouse;
-        if (mouse.clickedElement === el) {
-            mouse.clickedElement = parent;
-        }
-        if (mouse.lastClickedElement === el) {
-            mouse.lastClickedElement = parent;
-        }
-        if (mouse.hoverElement === el) {
-            mouse.hoverElement = parent;
-        }
+    const mouse = eventSystem.mouse;
+    if (mouse.clickedElement === el) {
+        mouse.clickedElement = el.parentNode;
     }
+    if (mouse.lastClickedElement === el) {
+        mouse.lastClickedElement = el.parentNode;
+    }
+    if (mouse.hoverElement === el) {
+        mouse.hoverElement = el.parentNode;
+    }
+}
+
+
+/**
+ * NOTE: this method is not ideal - it can only manage a single text node under a DOM element at a time.
+ * This is usually not enough. You're better off making a text abstraction.
+ */
+export function imText(text: string, r = getCurrentRoot()): Text {
+    if (r.elementSupplier === null) throw new Error("You probably didn't want to call this on a list root");
+
+    let textNode; textNode = imGetState(imText);
+    if (textNode === undefined) textNode = imSetState(document.createTextNode(text));
+
+    // The user can't select this text node if we're constantly setting it
+    if (textNode.nodeValue !== text) textNode.nodeValue = text;
+
+    appendToDomRoot(r.domAppender, textNode);
+
+    return textNode;
 }
