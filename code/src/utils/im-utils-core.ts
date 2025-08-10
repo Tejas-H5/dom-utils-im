@@ -454,8 +454,10 @@ function __beginListRenderer(l: ListRenderer) {
  * {@link imBeginList} or {@link imBeginListItem} directly in practice. 
  * But it does help to know how they are all the same think under the hood.
  */
-export function imBeginList(removeLevel: ListRenderer["cacheRemoveLevel"] = REMOVE_LEVEL_DETATCHED, r = getCurrentRoot()): ListRenderer {
+export function imBeginList(removeLevel: ListRenderer["cacheRemoveLevel"] = REMOVE_LEVEL_DETATCHED): ListRenderer {
     const core = imCore;
+    const r = getCurrentRoot();
+
     const items = r.items;
     const idx = getNextItemSlotIdx(r, core);
 
@@ -698,7 +700,9 @@ export function imEndTry() {
  *
  * See the {@link UIRoot} docs for more info on what a 'UIRoot' even is, what it's limitations are, and how to effectively (re)-use them.
  */
-export function imBeginListItem(key?: ValidKey, l = getCurrentListRendererInternal()) {
+export function imBeginListItem(key?: ValidKey) {
+    const l = getCurrentListRendererInternal();
+
     let result;
     if (key !== undefined) {
         // use the map
@@ -787,7 +791,8 @@ export function imBeginListItem(key?: ValidKey, l = getCurrentListRendererIntern
     return result;
 }
 
-export function imEndListItem(root = getCurrentRoot()) {
+export function imEndListItem() {
+    const root = getCurrentRoot();
     if (root.parentListRenderer === null) throw new Error("Expected this root to have a list renderer");
     imEnd(root.parentListRenderer.cacheRemoveLevel, root);
 }
@@ -800,7 +805,9 @@ export type DeferredAction = (() => void) | undefined;
 // Common immediate mode UI helpers
 
 // You'll have to re-enable immediate mode if you want to use this method directly.
-export function imGetStateRef<T>(typeId: TypeId<T>, r = getCurrentRoot()): StateItem<T | undefined> {
+export function imGetStateRef<T>(typeId: TypeId<T>): StateItem<T | undefined> {
+    const r = getCurrentRoot();
+
     const items = r.items;
     const idx = getNextItemSlotIdx(r, imCore);
 
@@ -860,8 +867,8 @@ export function imGetStateRef<T>(typeId: TypeId<T>, r = getCurrentRoot()): State
  * you may want to add them in at some point.
  * TODO: think of a better solution to this problem.
  */
-export function imGetState<T>(typeId: TypeId<T>, r = getCurrentRoot()): T | undefined {
-    const result = imGetStateRef(typeId, r).val;
+export function imGetState<T>(typeId: TypeId<T>): T | undefined {
+    const result = imGetStateRef(typeId).val;
 
     if (result === undefined) {
         imDisable("Expected a call to imSetState after imGetState (very easy to forget)");
@@ -925,8 +932,10 @@ const cssb = newCssBuilder("debug");
 const debugClass = cssb.cn("debug1pxSolidRed", [` { border: 1px solid red; }`]);
 // */
 
-export function imBeginRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E, parent = getCurrentRoot()): UIRoot<E> {
+export function imBeginRoot<E extends ValidElement = ValidElement>(elementSupplier: () => E): UIRoot<E> {
     hasDomDependency;
+
+    const parent = getCurrentRoot();
 
     const core = imCore;
 
@@ -993,7 +1002,10 @@ function __popStack() {
     }
 }
 
-export function imEndList(l = getCurrentListRendererInternal()) {
+export function imEndList() {
+    const l = getCurrentListRendererInternal();
+
+    // close out this list renderer.
 
     // remove all the UI components that may have been added by other builders in the previous render.
     for (let i = l.builderIdx; i < l.builders.length; i++) {
@@ -1069,7 +1081,7 @@ export function abortListAndRewindUiStack(l: ListRenderer) {
  *  if (imMemo(val === MEMO_CHANGED)) { //side-effect }
  *  ```
  */
-export function imMemo(val: unknown, r = getCurrentRoot()): ImMemoResult {
+export function imMemo(val: unknown): ImMemoResult {
     // NOTE: I had previously implemented imBeginMemo() and imEndMemo():
     // ```
     // if (imBeginMemo().val(x).objectVals(obj)) {
@@ -1087,9 +1099,10 @@ export function imMemo(val: unknown, r = getCurrentRoot()): ImMemoResult {
     // to imMemoDeep() which I definately don't want to ever implement. Also I was basically never using them. So I
     // have deleted them.
 
+    const r = getCurrentRoot();
     let result: ImMemoResult = MEMO_NOT_CHANGED;
 
-    let lastVal; lastVal = imGetState(inlineTypeId(imMemo), r); {
+    let lastVal; lastVal = imGetState(inlineTypeId(imMemo)); {
         if (lastVal === undefined) {
             // this way, imMemo always returns true on the first render
             lastVal = imSetState(MEMO_INITIAL_VALUE); 
