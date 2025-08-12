@@ -475,60 +475,57 @@ function imApp() {
 
                 imBeginDiv(); imText("Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
 
-                const l = imFor(); for (let row = 0; row < gridRows; row++) {
-                    const root = imBeginListItem(undefined, l); {
-                        const root2 = imBeginDiv(root); {
-                            if (root2.completedOneRender === false) {
-                                setAttr("style", "display: flex;");
-                            }
+                // NOTE: static list for performance. the grid size never changes. xD
+                for (let row = 0; row < gridRows; row++) {
+                    imBeginDiv(); {
+                        if (imIsFirstishRender()) {
+                            setAttr("style", "display: flex;");
+                        }
 
-                            const l = imFor(REMOVE_LEVEL_DETATCHED, root2); for (let col = 0; col < gridCols; col++) {
-                                const parent = imBeginListItem(undefined, l); {
-                                    const root = imBeginDiv(parent); {
-                                        if (root.completedOneRender === false) {
-                                            setClass(cnGridTile);
-                                        }
+                        for (let col = 0; col < gridCols; col++) {
+                            imBeginDiv(); {
+                                if (imIsFirstishRender()) {
+                                    setClass(cnGridTile);
+                                }
 
 
-                                        const idx = col + gridCols * row;
+                                const idx = col + gridCols * row;
 
-                                        if (elementHasMouseHover()) {
-                                            values[idx] = 1;
-                                        }
+                                if (elementHasMouseHover()) {
+                                    values[idx] = 1;
+                                }
 
-                                        // NOTE: usually you would do this with a CSS transition if you cared about performance, but
-                                        // I'm just trying out some random stuff.
-                                        let val = values[idx];
-                                        if (val > 0) {
-                                            val -= dt;
-                                            if (val < 0) {
-                                                val = 0;
-                                            }
-                                            values[idx] = val;
-                                        }
+                                // NOTE: usually you would do this with a CSS transition if you cared about performance, but
+                                // I'm just trying out some random stuff.
+                                let val = values[idx];
+                                if (val > 0) {
+                                    val -= dt;
+                                    if (val < 0) {
+                                        val = 0;
+                                    }
+                                    values[idx] = val;
+                                }
 
-                                        const valRounded = Math.round(val * 255) / 255;
-                                        const styleChanged = imMemo(valRounded, root);
-                                        if (styleChanged) {
-                                            setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
-                                        }
+                                const valRounded = Math.round(val * 255) / 255;
+                                const styleChanged = imMemo(valRounded);
+                                if (styleChanged) {
+                                    setStyle("backgroundColor", `rgba(0, 0, 0, ${val})`);
+                                }
 
-                                        // imBeginDiv(); {
-                                        //     if (imIsFirstishRender()) {
-                                        //         setStyle("position", "absolute");
-                                        //         setStyle("top", "25%");
-                                        //         setStyle("left", "25%");
-                                        //         setStyle("right", "25%");
-                                        //         setStyle("bottom", "25%");
-                                        //         setStyle("backgroundColor", "white");
-                                        //     }
-                                        // } imEnd();
-                                    } imEnd(REMOVE_LEVEL_DETATCHED, root);
-                                } imEndListItem(parent);
-                            } imEndFor(l);
-                        } imEnd(REMOVE_LEVEL_DETATCHED, root2);
-                    } imEndListItem(root);
-                } imEndFor(l);
+                                // imBeginDiv(); {
+                                //     if (imIsFirstishRender()) {
+                                //         setStyle("position", "absolute");
+                                //         setStyle("top", "25%");
+                                //         setStyle("left", "25%");
+                                //         setStyle("right", "25%");
+                                //         setStyle("bottom", "25%");
+                                //         setStyle("backgroundColor", "white");
+                                //     }
+                                // } imEnd();
+                            } imEnd();
+                        }
+                    } imEnd();
+                }
             } else if (imElseIf() && s.grid === GRID_MOST_OPTIMAL) {
                 imBeginDiv(); imText("[Theoretical best performance upperbound with our current approach]  Grid size: " + gridState.gridRows * gridState.gridCols); imEnd();
 

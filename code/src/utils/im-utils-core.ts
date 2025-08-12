@@ -48,9 +48,10 @@ export type ImCore = {
     uninitialized: boolean;
     appRoot:       UIRoot;
 
-    currentStack:    (UIRoot | ListRenderer)[];
+    currentStack: (UIRoot | ListRenderer)[];
     stackIdx: number;
-    topOfStack: UIRoot | ListRenderer | undefined;
+    uiRoot:  UIRoot | undefined | null; // memory hack. null means that the cache is invalidated, undefined means not currently rendering.
+    list: ListRenderer | undefined | null;
 
     imDisabled:       boolean;
     imDisabledReason: string;
@@ -116,6 +117,8 @@ const defaultCore = newImCore();
 
 // Contains ALL the state. In an atypical usecase, there may be multiple cores that must switch between each other.
 let imCore = defaultCore;
+let currentRoot: UIRoot | null | undefined = undefined;
+let currentList: ListRenderer | null | undefined = undefined;
 
 /** Don't forget to initialize this core with {@link initImDomUtils} */
 export function newImCore(root: HTMLElement = document.body): ImCore {
@@ -126,7 +129,8 @@ export function newImCore(root: HTMLElement = document.body): ImCore {
 
         currentStack: Array(8192).fill(null),
         stackIdx: -1,
-        topOfStack:   undefined,
+        uiRoot: undefined,
+        list: undefined,
 
         imDisabled: false,
         imDisabledReason: "",
@@ -285,7 +289,8 @@ function __beginUiRoot(r: UIRoot, startDomIdx: number, startItemIdx: number, par
 
     const stackIdx = ++imCore.stackIdx;
     imCore.currentStack[stackIdx] = r;
-    imCore.topOfStack = r;
+    imCore.uiRoot = r;
+    imCore.list = undefined;
 }
 
 // Recursively destroys all UI roots under this one.
@@ -409,7 +414,8 @@ function __beginListRenderer(l: ListRenderer) {
 
     const stackIdx = ++imCore.stackIdx;
     imCore.currentStack[stackIdx] = l;
-    imCore.topOfStack = l;
+    imCore.uiRoot = undefined;
+    imCore.list = l;
 }
 
 
@@ -453,6 +459,8 @@ function __beginListRenderer(l: ListRenderer) {
  * This is why I've added {@link imFor}, {@link imIf}, {@link imSwitch} et al, so I never use 
  * {@link imBeginList} or {@link imBeginListItem} directly in practice. 
  * But it does help to know how they are all the same think under the hood.
+ *
+ * NOTE: REMOVE_LEVEL_NONE doesn't work yet
  */
 export function imBeginList(removeLevel: ListRenderer["cacheRemoveLevel"] = REMOVE_LEVEL_DETATCHED): ListRenderer {
     const core = imCore;
@@ -491,7 +499,8 @@ function getNextItemSlotIdx(r: UIRoot, core: ImCore): number {
         throw new Error("Immediate mode has beend disabled for this section: " + core.imDisabledReason);
     }
 
-    if (r.itemsIdx === -1) { 
+    r.itemsIdx++;
+    if (r.itemsIdx === 0) {
         if (r.isInConditionalPathway === false) {
             r.isInConditionalPathway = true;
             r.startedConditionallyRendering = true;
@@ -519,7 +528,7 @@ function getNextItemSlotIdx(r: UIRoot, core: ImCore): number {
         }
     }
 
-    return ++r.itemsIdx;
+    return r.itemsIdx;
 }
 
 
@@ -655,7 +664,8 @@ export function imCatch(l: ListRenderer) {
 export function imEndTry() {
     imEnable();
 
-    if (imCore.topOfStack !== undefined && imCore.topOfStack.t === ITEM_UI_ROOT) {
+    const top = imCore.currentStack[imCore.stackIdx];
+    if (top !== undefined && top.t === ITEM_UI_ROOT) {
         imEndListItem();
     }
 
@@ -794,7 +804,7 @@ export function imBeginListItem(key?: ValidKey) {
 export function imEndListItem() {
     const root = getCurrentRoot();
     if (root.parentListRenderer === null) throw new Error("Expected this root to have a list renderer");
-    imEnd(root.parentListRenderer.cacheRemoveLevel, root);
+    imEnd(root.parentListRenderer.cacheRemoveLevel);
 }
 
 
@@ -909,22 +919,36 @@ export function imSetState<T>(val: T): T {
  * Mainly for use when you don't care what the type of the root is.
  */
 export function getCurrentRoot(): UIRoot {
+    if (imCore.uiRoot === null) {
+        const top = imCore.currentStack[imCore.stackIdx];
+        imCore.list = top.t === ITEM_LIST_RENDERER ? top : undefined;
+        imCore.uiRoot = top.t === ITEM_UI_ROOT ? top : undefined;
+    }
+
     /** 
      * Can't call this method without opening a new UI root. Common mistakes include: 
      *  - using end() instead of endList() to end lists
      *  - calling beginList() and then rendering a component without wrapping it in nextRoot like `nextRoot(); { ...component code... } end();`
      */
-    if (imCore.topOfStack === undefined) throw new Error("Nothing to get");
-    if (imCore.topOfStack.t !== ITEM_UI_ROOT) throw new Error("You may be rendering a list right now");
-    return imCore.topOfStack;
+    if (imCore.uiRoot === undefined) throw new Error("You may be rendering a list right now");;
+    return imCore.uiRoot;
 }
 
 // You probably don't want to use this, if you can help it
 export function getCurrentListRendererInternal(): ListRenderer {
-    /** Can't call this method without opening a new list renderer (see {@link imBeginList}) */
-    if (imCore.topOfStack === undefined) throw new Error("Nothing to get");
-    if (imCore.topOfStack.t !== ITEM_LIST_RENDERER) throw new Error("You are not be rendering a list right now ...");
-    return imCore.topOfStack;
+    if (imCore.list === null) {
+        const top = imCore.currentStack[imCore.stackIdx];
+        imCore.list = top.t === ITEM_LIST_RENDERER ? top : undefined;
+        imCore.uiRoot = top.t === ITEM_UI_ROOT ? top : undefined;
+    }
+
+    /** 
+     * Can't call this method without opening a new UI root. Common mistakes include: 
+     *  - using end() instead of endList() to end lists
+     *  - calling beginList() and then rendering a component without wrapping it in nextRoot like `nextRoot(); { ...component code... } end();`
+     */
+    if (imCore.list === undefined) throw new Error("You may be rendering a list right now");;
+    return imCore.list;
 }
 
 /**
@@ -972,14 +996,17 @@ export function imBeginRoot<E extends ValidElement = ValidElement>(elementSuppli
  * This method pops any element from the global element stack that we created via {@link imBeginRoot}.
  * This is called `imEnd` instad of `end`, because `end` is a good variable name that we don't want to squat on.
  */
-export function imEnd(removeLevel: RemovedLevel = REMOVE_LEVEL_DETATCHED, r: UIRoot = getCurrentRoot()) {
+export function imEnd(removeLevel: RemovedLevel = REMOVE_LEVEL_DETATCHED) {
+    const r = getCurrentRoot();
+
     if (r.elementSupplier !== null) {
         finalizeDomAppender(r.domAppender);
-
         bubbleMouseEvents(r, imCore.imEventSystem);
     }
 
-    __popStack();
+    imCore.stackIdx--;
+    imCore.uiRoot = null;
+    imCore.list = null;
 
     r.completedOneRender = true;
 
@@ -987,18 +1014,6 @@ export function imEnd(removeLevel: RemovedLevel = REMOVE_LEVEL_DETATCHED, r: UIR
         __removeAllDomElementsFromUiRoot(r, removeLevel);
     } else {
         if (r.itemsIdx !== r.items.length - 1) throw new Error("A different number of immediate mode state entries were pushed this render. You may be doing conditional rendering in a way that is invisible to this framework. See imIf, imElseIf, imElse, imSwitch, imFor, imWhile, imList, imNextListRoot, etc. for some alternatives.");
-    }
-}
-
-
-function __popStack() {
-    const core = imCore;
-
-    const stackIdx = --core.stackIdx;
-    if (stackIdx < 0) {
-        core.topOfStack = undefined;
-    } else {
-        core.topOfStack = core.currentStack[stackIdx];
     }
 }
 
@@ -1026,7 +1041,9 @@ export function imEndList() {
         }
     }
 
-    __popStack();
+    imCore.stackIdx--;
+    imCore.uiRoot = null;
+    imCore.list = null;
 }
 
 function newListRenderer(root: UIRoot): ListRenderer {
@@ -1048,7 +1065,6 @@ export function abortListAndRewindUiStack(l: ListRenderer) {
     const idx = core.currentStack.lastIndexOf(l, core.stackIdx);
     if (idx === -1) throw new Error("Expected this list element to be on the current element stack");
     core.stackIdx = idx;
-    core.topOfStack = l;
 
     const r = l.current;
     if (r !== null) {

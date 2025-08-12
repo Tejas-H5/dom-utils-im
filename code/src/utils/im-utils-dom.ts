@@ -37,8 +37,8 @@ export function newDomAppender<E extends ValidElement>(root: E): DomAppender<E> 
 
 export function finalizeDomAppender(appender: DomAppender<ValidElement>) {
     if (
-        appender.manualDom === false && 
-        (appender.childrenChanged === true || appender.idx !== appender.lastIdx)
+        (appender.childrenChanged === true || appender.idx !== appender.lastIdx) &&
+        appender.manualDom === false 
     ) {
         // TODO: measure perf impacts.
         // TODO: consider clear, then replace children.
@@ -527,8 +527,8 @@ export function newSpan() {
     return document.createElement("span");
 }
 
-export function imBeginDiv(parent = getCurrentRoot()): UIRoot<HTMLDivElement> {
-    return imBeginRoot<HTMLDivElement>(newDiv, parent);
+export function imBeginDiv(): UIRoot<HTMLDivElement> {
+    return imBeginRoot<HTMLDivElement>(newDiv);
 }
 
 export function imBeginSpan(): UIRoot<HTMLSpanElement> {
@@ -740,6 +740,8 @@ export function endProcessingImEvent(eventSystem: ImGlobalEventSystem) {
 }
 
 export function bubbleMouseEvents(r: UIRoot, eventSystem: ImGlobalEventSystem) {
+    return;
+
     // Defer the mouse events upwards, so that parent elements can handle it if they want
     const el = r.root;
 
