@@ -9,40 +9,32 @@ export type ImCacheEntries = any[];
 
 // TODO: I know one of these two (ENTRIES_REMOVE_LEVEL, ENTRIES_IS_IN_CONDITIONAL_PATHWAY) are redundant. I just can't seem to be able to prove it ...
 const ENTRIES_IDX = 0;
-const ENTRIES_TYPE = 1;
-const ENTRIES_LAST_IDX = 2;
-const ENTRIES_REMOVE_LEVEL = 3;
-const ENTRIES_IS_IN_CONDITIONAL_PATHWAY = 4;
-const ENTRIES_STARTED_CONDITIONALLY_RENDERING = 5;
-const ENTRIES_DESTRUCTORS = 6;
-const ENTRIES_ITEMS_START = 7;
+const ENTRIES_LAST_IDX = 1;
+const ENTRIES_REMOVE_LEVEL = 2;
+const ENTRIES_IS_IN_CONDITIONAL_PATHWAY = 3;
+const ENTRIES_STARTED_CONDITIONALLY_RENDERING = 4;
+const ENTRIES_DESTRUCTORS = 5;
+const ENTRIES_KEYED_MAP = 6;
+const ENTRIES_KEYED_MAP_LAST_IDX = 7;
+const ENTRIES_PARENT_TYPE = 8;
+const ENTRIES_PARENT_VALUE = 9;
+const ENTRIES_ITEMS_START = 10;
 
 export type ImCache = (ImCacheEntries | any)[];
-const STACK_IDX = 0;
-const STACK_CACHED_ENTRIES = 1;
-const STACK_CONTEXTS = 2;
-const STACK_ROOT_ENTRIES = 3;
-const STACK_ENTRIES_START = 4;
+const CACHE_IDX = 0;
+const CACHE_CURRENT_ENTRIES = 1;
+const CACHE_CONTEXTS = 2;
+const CACHE_ROOT_ENTRIES = 3;
+const CACHE_ENTRIES_START = 4;
 
 export const REMOVE_LEVEL_NONE = 1;
 export const REMOVE_LEVEL_DETATCHED = 2;
 export const REMOVE_LEVEL_DESTROYED = 3;
 
-export type RemovedLevel 
+export type RemovedLevel
     = typeof REMOVE_LEVEL_NONE
     | typeof REMOVE_LEVEL_DETATCHED   // This is the default remove level. The increase in performance far oughtweighs any memory problems. 
     | typeof REMOVE_LEVEL_DESTROYED;
-
-export type ImList = any[];
-const LIST_IDX = 0; // ENTRIES_IDX;
-const LIST_TYPE = 1; // ENTRIES_TYPE;
-const LIST_MAP = 2;
-const LIST_CACHE_REMOVE_LEVEL = 3;
-const LIST_ITEMS_START = 4;
-
-
-const TYPE_LIST = 69;
-const TYPE_ENTRIES = 420;
 
 // TypeIDs allow us to provide some basic sanity checks and protection
 // against the possiblity of data corruption that can happen when im-state is accessed 
@@ -67,64 +59,76 @@ export type ValidKey = string | number | Function | object | boolean | null;
 
 export function imCacheBegin(c: ImCache) {
     if (c.length === 0) {
-        c.length = STACK_ENTRIES_START;
+        c.length = CACHE_ENTRIES_START;
         // starts at -1 and increments onto the current value. So we can keep accessing this idx over and over without doing idx - 1.
         // NOTE: memory access is supposedly far slower than math. So might not matter too much
-        c[STACK_IDX] = STACK_ENTRIES_START - 1;
-        c[STACK_CACHED_ENTRIES] = undefined;
-        c[STACK_CONTEXTS] = [];
-        c[STACK_ROOT_ENTRIES] = [];
+        c[CACHE_IDX] = 0;
+        c[CACHE_CONTEXTS] = [];
+        c[CACHE_ROOT_ENTRIES] = [];
+        c[CACHE_CURRENT_ENTRIES] = c[CACHE_ROOT_ENTRIES];
     }
 
-    imCacheEntriesPush(c, c[STACK_ROOT_ENTRIES]);
+    c[CACHE_IDX] = CACHE_ENTRIES_START - 1;
+
+    imCacheEntriesPush(c, c[CACHE_ROOT_ENTRIES], imCacheBegin, c);
+
+    return c;
 }
 
 export function imCacheEnd(c: ImCache) {
     imCacheEntriesPop(c);
 
-    const startIdx = STACK_ENTRIES_START - 1;
-    if (c[STACK_IDX] > startIdx) {
+    const startIdx = CACHE_ENTRIES_START - 1;
+    if (c[CACHE_IDX] > startIdx) {
         console.error("You've forgotten to pop some things: ", c.slice(startIdx + 1));
         throw new Error("You've forgotten to pop some things");
-    } else if (c[STACK_IDX] < startIdx) {
+    } else if (c[CACHE_IDX] < startIdx) {
         throw new Error("You've popped too many thigns off the stack!!!!");
     }
 }
 
-export function imCacheEntriesPush(c: ImCache, entries: ImCacheEntries) {
-    const idx = ++c[STACK_IDX];
+export function imCacheEntriesPush<T>(
+    c: ImCache,
+    entries: ImCacheEntries,
+    parentTypeId: TypeId<T>,
+    parent: T
+) {
+    const idx = ++c[CACHE_IDX];
     if (idx === c.length) {
-        c.push(entries); 
+        c.push(entries);
     } else {
         c[idx] = entries;
     }
 
-    c[STACK_CACHED_ENTRIES] = entries;
+    c[CACHE_CURRENT_ENTRIES] = entries;
 
     if (entries.length === 0) {
         entries.length = ENTRIES_ITEMS_START;
         entries[ENTRIES_IDX] = ENTRIES_ITEMS_START - 2;
-        entries[ENTRIES_TYPE] = TYPE_ENTRIES;
         entries[ENTRIES_LAST_IDX] = 0;
         entries[ENTRIES_REMOVE_LEVEL] = REMOVE_LEVEL_DETATCHED;
         entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY] = false;
         entries[ENTRIES_STARTED_CONDITIONALLY_RENDERING] = false;
+        entries[ENTRIES_PARENT_TYPE] = parentTypeId;
+        entries[ENTRIES_PARENT_VALUE] = parent;
         entries[ENTRIES_DESTRUCTORS] = undefined;
+        entries[ENTRIES_KEYED_MAP] = undefined;
+        entries[ENTRIES_KEYED_MAP_LAST_IDX] = 0;
+    } else {
+        assert(entries[ENTRIES_PARENT_TYPE] === parentTypeId);
+
     }
 
     entries[ENTRIES_IDX] = ENTRIES_ITEMS_START - 2;
 }
 
 export function imCacheEntriesPop(c: ImCache) {
-    const idx = --c[STACK_IDX];
-    const val = c[STACK_CACHED_ENTRIES];
-    c[STACK_CACHED_ENTRIES] = c[idx];
-    return val;
+    const idx = --c[CACHE_IDX];
+    c[CACHE_CURRENT_ENTRIES] = c[idx];
 }
 
 export function imCacheEntriesGet<T>(c: ImCache, typeId: TypeId<T>): T | undefined {
-    const entries = c[STACK_CACHED_ENTRIES];
-    assert(entries[ENTRIES_TYPE] === TYPE_ENTRIES);
+    const entries = c[CACHE_CURRENT_ENTRIES];
 
     entries[ENTRIES_IDX] += 2;
     const idx = entries[ENTRIES_IDX];
@@ -155,16 +159,16 @@ export function imCacheEntriesGet<T>(c: ImCache, typeId: TypeId<T>): T | undefin
 }
 
 
-export function imCacheEntriesGetFirst<T>(s: ImCacheEntries, typeId: TypeId<T>): T {
+export function imCacheEntriesGetParent<T>(s: ImCacheEntries, typeId: TypeId<T>): T {
     // If this assertion fails, then you may have forgotten to pop some things you've pushed onto the stack
-    const entries = s[STACK_CACHED_ENTRIES];
-    assert(entries[ENTRIES_ITEMS_START] === typeId);
-    return entries[ENTRIES_ITEMS_START + 1] as T;
+    const entries = s[CACHE_CURRENT_ENTRIES];
+    assert(entries[ENTRIES_PARENT_TYPE] === typeId);
+    return entries[ENTRIES_PARENT_VALUE] as T;
 }
 
 
 export function imCacheEntriesSet<T>(c: ImCache, val: T): T {
-    const entries = c[STACK_CACHED_ENTRIES];
+    const entries = c[CACHE_CURRENT_ENTRIES];
     const idx = entries[ENTRIES_IDX];
     entries[idx + 1] = val;
     return val;
@@ -172,102 +176,54 @@ export function imCacheEntriesSet<T>(c: ImCache, val: T): T {
 
 type ListMapBlock = { rendered: boolean; entries: ImCacheEntries; };
 
-export function imCacheListBegin(c: ImCache): ImList {
-    let list; list = imCacheEntriesGet(c, imCacheListBegin);
-    if (list === undefined) list = imCacheEntriesSet(c, []);
 
-    if (list.length === 0) {
-        list.length = LIST_ITEMS_START;
-        list[LIST_IDX] = LIST_ITEMS_START - 2;
-        list[LIST_TYPE] = TYPE_LIST;
-        list[LIST_CACHE_REMOVE_LEVEL] = REMOVE_LEVEL_DETATCHED;
-        list[LIST_MAP] = undefined;
+export function imBlockKeyedBegin(c: ImCache, key: ValidKey) {
+    const entries = c[CACHE_CURRENT_ENTRIES];
+    
+    let map = entries[ENTRIES_KEYED_MAP] as (Map<ValidKey, ListMapBlock> | undefined);
+    if (map === undefined) {
+        map = new Map<ValidKey, ListMapBlock>();
+        entries[ENTRIES_KEYED_MAP] = map;
     }
 
-    // init the list
-    {
-        list[LIST_IDX] = LIST_ITEMS_START - 2;
-
-        const map = list[LIST_MAP] as (undefined | Map<ValidKey, ListMapBlock>);
-        if (map !== undefined) {
-            for (const v of map.values()) {
-                v.rendered = false;
-            }
+    if (entries[ENTRIES_IDX] < entries[ENTRIES_KEYED_MAP_LAST_IDX]) {
+        // This is probably a new render pass. we can initialize the map here.
+        for (const v of map.values()) {
+            v.rendered = false;
         }
     }
+    entries[ENTRIES_KEYED_MAP_LAST_IDX] = entries[ENTRIES_IDX];
 
-    const idx = ++c[STACK_IDX];
-    if (idx === c.length) c.push(list); else c[idx] = list;
-
-    return list;
-}
-
-export function imCacheListItemBegin(c: ImCache, key?: ValidKey) {
-    const list = c[STACK_CACHED_ENTRIES];
-    assert(list[LIST_TYPE] === TYPE_LIST);
-
-    if (key !== undefined) {
-        let map = list[LIST_MAP];
-        if (map === undefined) map = new Map<ValidKey, ListMapBlock>();
-
-        let block = map.get(key);
-        if (block === undefined) block = { rendered: false, entries: [] };
-
-        /**
-         * You're rendering this list element twice. You may have duplicate keys in your dataset.
-         * If that is not the case, a more common cause is that you are mutating collections while iterating them.
-         *
-         * If you're doing this in an infrequent event, here's a quick fix:
-         * {
-         *      let deferredAction: () => {};
-         *      imCacheListItemBegin(s);
-         *      for (item of list) {
-         *          if (event) deferredAction = () => literally same mutation
-         *      }
-         *      imCacheListItemEnd(s);
-         *      if (deferredAction !== undefined) deferredAction();
-         * }
-         */
-        if (block.rendered === true) throw new Error(
-            "You've requested the same list key twice. This is indicative of a bug. The comment above this exception will explain more."
-        );
-
-        block.rendered = true;
-        imCacheEntriesPush(c, block.entries);
-    } else {
-        // Literally a no-op. we render directly into our list array.
-    }
-}
-
-export function imCacheListItemEnd(c: ImCache) {
-    const listOrEntry = c[STACK_CACHED_ENTRIES];
-    if (listOrEntry[LIST_TYPE] === TYPE_ENTRIES) {
-        imCacheEntriesPop(c);
-    }
-}
-
-// NOTE: potentially, user already has a handle to list, they can pass it in.
-// Becuse they needed to go through the list and clean up anything we didn't render, and call this method after.
-export function imCacheListEnd(c: ImCache) {
-    const list = c[STACK_CACHED_ENTRIES];
-    assert(list[LIST_TYPE] === TYPE_LIST);
-
-    // close out this list renderer.
-
-    if (list[LIST_CACHE_REMOVE_LEVEL] === REMOVE_LEVEL_DESTROYED) {
-        list.length = list[LIST_IDX] + 1;
-
-        const map = list[LIST_MAP];
-        if (map !== undefined) {
-            for (const [k, v] of map) {
-                if (v.rendered === false) {
-                    list.keys.delete(k);
-                }
-            }
-        }
+    let block = map.get(key);
+    if (block === undefined) {
+        block = { rendered: false, entries: [] };
+        map.set(key, block);
     }
 
-    imCacheEntriesPop(c);
+
+    /**
+     * You're rendering this list element twice. You may have duplicate keys in your dataset.
+     * If that is not the case, a more common cause is that you are mutating collections while iterating them.
+     * All sorts of bugs and performance issues tend to arise when I 'gracefully' handle this case, so I've just thrown an exception instead.
+     *
+     * If you're doing this in an infrequent event, here's a quick fix:
+     * {
+     *      let deferredAction: () => {};
+     *      imCacheListItemBegin(s);
+     *      for (item of list) {
+     *          if (event) deferredAction = () => literally same mutation
+     *      }
+     *      imCacheListItemEnd(s);
+     *      if (deferredAction !== undefined) deferredAction();
+     * }
+     */
+    if (block.rendered === true) throw new Error(
+        "You've requested the same list key twice. This is indicative of a bug. The comment above this exception will explain more."
+    );
+
+    block.rendered = true;
+
+    __imDerivedBlockBegin(c);
 }
 
 export function imCacheEntriesAddDestructor(entries: ImCacheEntries, destructor: () => void) {
@@ -279,37 +235,31 @@ export function imCacheEntriesAddDestructor(entries: ImCacheEntries, destructor:
     destructors.push(destructor);
 }
 
-export function imCacheEntriesOnRemove(entries: ImCacheEntries, start = ENTRIES_ITEMS_START) {
+export function imCacheEntriesOnRemove(entries: ImCacheEntries) {
     // don't re-traverse these items.
     if (entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY] === true) {
         entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY] = false;
 
-        for (let i = start; i < entries.length; i += 2) {
+        for (let i = ENTRIES_ITEMS_START; i < entries.length; i += 2) {
             const t = entries[i];
             const v = entries[i + 1];
-
-            if (t === TYPE_ENTRIES) {
-                imCacheEntriesOnRemove(v, ENTRIES_ITEMS_START);
-            } else if (t === TYPE_LIST) {
-                imCacheEntriesOnRemove(v, LIST_ITEMS_START);
+            if (t === imBlockBegin) {
+                imCacheEntriesOnRemove(v);
             }
         }
     }
 }
 
-export function imCacheEntriesOnDestroy(entries: ImCacheEntries, start = ENTRIES_ITEMS_START) {
+export function imCacheEntriesOnDestroy(entries: ImCacheEntries) {
     // don't re-traverse these items.
     if (entries[ENTRIES_REMOVE_LEVEL] < REMOVE_LEVEL_DESTROYED) {
         entries[ENTRIES_REMOVE_LEVEL] = REMOVE_LEVEL_DESTROYED;
 
-        for (let i = start; i < entries.length; i += 2) {
+        for (let i = ENTRIES_ITEMS_START; i < entries.length; i += 2) {
             const t = entries[i];
             const v = entries[i + 1];
-
-            if (t === TYPE_ENTRIES) {
-                imCacheEntriesOnDestroy(v, ENTRIES_ITEMS_START);
-            } else if (t === TYPE_LIST) {
-                imCacheEntriesOnDestroy(v, LIST_ITEMS_START);
+            if (t === imBlockBegin) {
+                imCacheEntriesOnDestroy(v);
             }
         }
 
@@ -327,17 +277,88 @@ export function imCacheEntriesOnDestroy(entries: ImCacheEntries, start = ENTRIES
     }
 }
 
-export function imBlockBegin(c: ImCache): ImCacheEntries {
+export function imBlockBegin<T>(c: ImCache, parentTypeId: TypeId<T>, parent: T): ImCacheEntries {
     let entries; entries = imCacheEntriesGet(c, imBlockBegin);
     if (entries === undefined) entries = imCacheEntriesSet(c, []);
 
-    imCacheEntriesPush(c, entries);
+    imCacheEntriesPush(c, entries, parentTypeId, parent);
 
     return entries;
 }
 
 export function imBlockEnd(c: ImCache) {
+    const entries = c[CACHE_CURRENT_ENTRIES];
+    let map = entries[ENTRIES_KEYED_MAP] as (Map<ValidKey, ListMapBlock> | undefined);
+
+    if (map !== undefined) {
+         // TODO: Blocks need to either have a 'REMOVE_LEVEL_DETATCHED' or a 'REMOVE_LEVEL_DESTROYED' so that
+         // we know what to do with the things we didn't render. For now, defaulting to DETATCHED
+        for (const v of map.values()) {
+            if (!v.rendered) {
+                imCacheEntriesOnRemove(v.entries);
+            }
+        }
+    }
+
+    const idx = entries[ENTRIES_IDX];
+    if (idx < entries[ENTRIES_LAST_IDX]) {
+
+    }
+
     return imCacheEntriesPop(c);
+}
+
+export function __imDerivedBlockBegin(c: ImCache) {
+    const entries    = c[CACHE_CURRENT_ENTRIES];
+    const parentType = entries[ENTRIES_PARENT_TYPE];
+    const parent     = entries[ENTRIES_PARENT_VALUE];
+
+    imBlockBegin(c, parentType, parent);
+
+    return entries;
+}
+
+export function __imDerivedBlockEnd(c: ImCache) {
+    // The DOM appender will automatically update and diff the children if they've changed.
+    // However we can't just do
+    // ```
+    // if (blah) {
+    //      new component here
+    // }
+    // ```
+    //
+    // Because this would de-sync the immediate mode call-sites from their positions in the cache entries.
+    // But simply putting them in another entry list:
+    //
+    // imConditionalBlock();
+    // if (blah) {
+    // }
+    // imConditionalBlockEnd();
+    //
+    // Will automatically isolate the next immediate mode call-sites with zero further effort required.
+    // It's a bit confusing why there isn't more logic here though, I guess.
+    //
+    // NOTE: I've now moved this functionality into core. Your immediate mode tree builder will need
+    // to resolve diffs in basically the same way.
+
+    imBlockEnd(c);
+}
+
+function imIf(c: ImCache): true {
+    __imDerivedBlockBegin(c);
+        __imDerivedBlockBegin(c);
+    return true;
+}
+
+function imElse(c: ImCache): true {
+        __imDerivedBlockEnd(c);
+        __imDerivedBlockBegin(c);
+    return true;
+}
+
+function imIfEnd(c: ImCache) {
+        __imDerivedBlockEnd(c);
+    __imDerivedBlockEnd(c);
 }
 
 ///////////////////////////////////////////////
@@ -348,7 +369,7 @@ export type ValidElement = HTMLElement | SVGElement;
 
 type AppendableElement = (ValidElement | Text);
 export type DomAppender<E extends ValidElement = ValidElement> = {
-    root: E; 
+    root: E;
     ref: unknown;
     idx: number;
     children: AppendableElement[];
@@ -372,7 +393,7 @@ export function newDomAppender<E extends ValidElement>(root: E): DomAppender<E> 
 export function finalizeDomAppender(appender: DomAppender<ValidElement>) {
     if (
         (appender.childrenChanged === true || appender.idx !== appender.lastIdx) &&
-        appender.manualDom === false 
+        appender.manualDom === false
     ) {
         // TODO: measure perf impacts.
         // TODO: consider clear, then replace children.
@@ -518,9 +539,8 @@ export function imElBegin<K extends keyof HTMLElementTagNameMap>(
     c: ImCache,
     r: KeyRef<K>
 ): DomAppender<HTMLElementTagNameMap[K]> {
-    const appender = imCacheEntriesGetFirst(c, newDomAppender);
-    
-    imBlockBegin(c);
+    // Make this entry in the current entry list, so we can delete it easily
+    const appender = imCacheEntriesGetParent(c, newDomAppender);
 
     let childAppender: DomAppender<HTMLElementTagNameMap[K]> | undefined = imCacheEntriesGet(c, newDomAppender);
     if (childAppender === undefined) {
@@ -531,36 +551,29 @@ export function imElBegin<K extends keyof HTMLElementTagNameMap>(
 
     appendToDomRoot(appender, childAppender.root);
 
+    imBlockBegin(c, newDomAppender, childAppender);
+
+    childAppender.idx = -1;
+
     return childAppender;
 }
 
 export function imElEnd(c: ImCache, r: KeyRef<keyof HTMLElementTagNameMap>) {
-    const appender = imCacheEntriesGetFirst(c, newDomAppender);
+    const appender = imCacheEntriesGetParent(c, newDomAppender);
     assert(appender.ref === r) // make sure we're popping the right thing
     finalizeDomAppender(appender);
     imBlockEnd(c);
 }
 
 
-export function imConditionalBlockBegin(c: ImCache) {
-    return imBlockBegin(c);
-}
-
-export function imConditionalBlockEnd(c: ImCache) {
-    const entries = imBlockEnd(c);
-
-    if (entries[ENTRIES_IDX] === ENTRIES_ITEMS_START - 2) {
-        // We rendered nothing. These elements gotta go.
-    }
-}
-
 function imDomRootBegin(c: ImCache, root: ValidElement) {
-    imBlockBegin(c);
     let appender = imCacheEntriesGet(c, newDomAppender);
     if (appender === undefined) {
         appender = imCacheEntriesSet(c, newDomAppender(root));
         appender.ref = root;
     }
+
+    imBlockBegin(c, newDomAppender, appender);
 
     appender.idx = -1;
 
@@ -568,9 +581,10 @@ function imDomRootBegin(c: ImCache, root: ValidElement) {
 }
 
 function imDomRootEnd(c: ImCache, root: ValidElement) {
-    let appender = imCacheEntriesGetFirst(c, newDomAppender);
+    let appender = imCacheEntriesGetParent(c, newDomAppender);
     assert(appender.ref === root);
     finalizeDomAppender(appender);
+
     imBlockEnd(c);
 }
 
@@ -582,19 +596,73 @@ function imText(c: ImCache, text: string): Text {
     // The user can't select this text node if we're constantly setting it
     if (textNode.nodeValue !== text) textNode.nodeValue = text;
 
-    const domAppender = imCacheEntriesGetFirst(c, newDomAppender);
+    const domAppender = imCacheEntriesGetParent(c, newDomAppender);
     appendToDomRoot(domAppender, textNode);
 
     return textNode;
 }
 
+
+
+// TODO:
+// - Core:
+//      - imMemo
+// - User:
+//      - [ ] im conditional block
+//       - [ ] im-if, imelseif, im else
+//       - [ ] im switch
+//      - [ ] im for
+
+
+// Case 1:
+// - Entries
+//      - first=domApender, rest=children
+//
+//      - easy for each entry to find the dom appender. but how do we delete?
+//      for i in entries[0,len,2]:
+//          if entries[i] === imBlockBegin:
+//              if entries[i+1][ENTRIES_ITEMS_START] === newDomAppender:
+//                  entries[i+1][ENTRIES_ITEMS_START + 1].root.remove();
+//                  onRemove(^)
+//      - Yeah. if deleting is hard, everything else will be hard. so this is a no go.
+//                  
+//
+//
+// Case 2:
+// - domAppender
+// - entries
+//
+// - easy to delete. But how does each entry knowo about `domAppender` ?
+//      - const parentEntries = c[c[CACHE_IDX] - 1];
+//        assert(current[current[ENTRIES_IDX]] === newDomAppender);
+//        const domAppender = current[current[ENTRIES_IDX] + 1];
+//      - even though it is the more frequent op, it should keep the codebase simpler. we can also cache the parent. 
+//
+// Case 3:
+// - why not just put it in both places??? <------- [x]
+//
+
 const c: ImCacheEntries = [];
+
+let toggle = false;
 
 function imMain() {
     imCacheBegin(c); {
         imDomRootBegin(c, document.body); {
+            if (imIf(c) && toggle) {
+                imElBegin(c, El.Div); {
+                    imText(c, "Henlo");
+                } imElEnd(c, El.Div);
+            } else {
+                imElse(c);
+
+                imElBegin(c, El.B); {
+                    imText(c, "G bye");
+                } imElEnd(c, El.B);
+            } imIfEnd(c);
             imElBegin(c, El.Div); {
-                imText(c, "Henlo");
+                imText(c, "Bro");
+                imText(c, "!");
             } imElEnd(c, El.Div);
         } imDomRootEnd(c, document.body);
     } imCacheEnd(c);
@@ -602,21 +670,26 @@ function imMain() {
 
 imMain();
 
+document.addEventListener("keydown", () => {
+    toggle = !toggle;
+    imMain();
+});
+
 // TODO: userland code
 //
 
-            /*
-            if (r.parentRoot !== null) {
-                // The only way to know that a root is no longer removed is that
-                // we have actually started rendering things underneath it.
-                r.parentRoot.removeLevel = REMOVE_LEVEL_NONE;
-            } */
+/*
+if (r.parentRoot !== null) {
+    // The only way to know that a root is no longer removed is that
+    // we have actually started rendering things underneath it.
+    r.parentRoot.removeLevel = REMOVE_LEVEL_NONE;
+} */
 
-            // if (r.debug === true) {
-            //     console.log("visibility change", r.parentRoot);
-            //     setClass(debug1PxSolidRed, true, r);
-            //     setTimeout(() => {
-            //         setClass(debug1PxSolidRed, false, r);
-            //     }, 1000);
-            // }
-            //
+// if (r.debug === true) {
+//     console.log("visibility change", r.parentRoot);
+//     setClass(debug1PxSolidRed, true, r);
+//     setTimeout(() => {
+//         setClass(debug1PxSolidRed, false, r);
+//     }, 1000);
+// }
+//
