@@ -12,13 +12,14 @@ const ENTRIES_IDX = 0;
 const ENTRIES_LAST_IDX = 1;
 const ENTRIES_REMOVE_LEVEL = 2;
 const ENTRIES_IS_IN_CONDITIONAL_PATHWAY = 3;
-const ENTRIES_STARTED_CONDITIONALLY_RENDERING = 4;
-const ENTRIES_DESTRUCTORS = 5;
-const ENTRIES_KEYED_MAP = 6;
-const ENTRIES_KEYED_MAP_LAST_IDX = 7;
-const ENTRIES_PARENT_TYPE = 8;
-const ENTRIES_PARENT_VALUE = 9;
-const ENTRIES_ITEMS_START = 10;
+const ENTRIES_IS_DERIVED = 4;
+const ENTRIES_STARTED_CONDITIONALLY_RENDERING = 5;
+const ENTRIES_DESTRUCTORS = 6;
+const ENTRIES_KEYED_MAP = 7;
+const ENTRIES_KEYED_MAP_LAST_IDX = 8;
+const ENTRIES_PARENT_TYPE = 9;
+const ENTRIES_PARENT_VALUE = 10;
+const ENTRIES_ITEMS_START = 11; 
 
 export type ImCache = (ImCacheEntries | any)[];
 const CACHE_IDX = 0;
@@ -57,7 +58,7 @@ export function inlineTypeId<T = undefined>(fn: Function) {
 // Can be any valid object reference. Or string, but avoid string if you can - string comparisons are slower than object comparisons
 export type ValidKey = string | number | Function | object | boolean | null;
 
-export function imCacheBegin(c: ImCache) {
+export function imCache(c: ImCache) {
     if (c.length === 0) {
         c.length = CACHE_ENTRIES_START;
         // starts at -1 and increments onto the current value. So we can keep accessing this idx over and over without doing idx - 1.
@@ -70,7 +71,7 @@ export function imCacheBegin(c: ImCache) {
 
     c[CACHE_IDX] = CACHE_ENTRIES_START - 1;
 
-    imCacheEntriesPush(c, c[CACHE_ROOT_ENTRIES], imCacheBegin, c);
+    imCacheEntriesPush(c, c[CACHE_ROOT_ENTRIES], imCache, c);
 
     return c;
 }
@@ -105,9 +106,10 @@ export function imCacheEntriesPush<T>(
     if (entries.length === 0) {
         entries.length = ENTRIES_ITEMS_START;
         entries[ENTRIES_IDX] = ENTRIES_ITEMS_START - 2;
-        entries[ENTRIES_LAST_IDX] = 0;
+        entries[ENTRIES_LAST_IDX] = ENTRIES_ITEMS_START - 2;
         entries[ENTRIES_REMOVE_LEVEL] = REMOVE_LEVEL_DETATCHED;
         entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY] = false;
+        entries[ENTRIES_IS_DERIVED] = false;
         entries[ENTRIES_STARTED_CONDITIONALLY_RENDERING] = false;
         entries[ENTRIES_PARENT_TYPE] = parentTypeId;
         entries[ENTRIES_PARENT_VALUE] = parent;
@@ -127,7 +129,7 @@ export function imCacheEntriesPop(c: ImCache) {
     c[CACHE_CURRENT_ENTRIES] = c[idx];
 }
 
-export function imCacheEntriesGet<T>(c: ImCache, typeId: TypeId<T>): T | undefined {
+export function imGet<T>(c: ImCache, typeId: TypeId<T>): T | undefined {
     const entries = c[CACHE_CURRENT_ENTRIES];
 
     entries[ENTRIES_IDX] += 2;
@@ -159,15 +161,15 @@ export function imCacheEntriesGet<T>(c: ImCache, typeId: TypeId<T>): T | undefin
 }
 
 
-export function imCacheEntriesGetParent<T>(s: ImCacheEntries, typeId: TypeId<T>): T {
+export function imGetParent<T>(c: ImCache, typeId: TypeId<T>): T {
     // If this assertion fails, then you may have forgotten to pop some things you've pushed onto the stack
-    const entries = s[CACHE_CURRENT_ENTRIES];
+    const entries = c[CACHE_CURRENT_ENTRIES];
     assert(entries[ENTRIES_PARENT_TYPE] === typeId);
     return entries[ENTRIES_PARENT_VALUE] as T;
 }
 
 
-export function imCacheEntriesSet<T>(c: ImCache, val: T): T {
+export function imSet<T>(c: ImCache, val: T): T {
     const entries = c[CACHE_CURRENT_ENTRIES];
     const idx = entries[ENTRIES_IDX];
     entries[idx + 1] = val;
@@ -278,8 +280,8 @@ export function imCacheEntriesOnDestroy(entries: ImCacheEntries) {
 }
 
 export function imBlockBegin<T>(c: ImCache, parentTypeId: TypeId<T>, parent: T): ImCacheEntries {
-    let entries; entries = imCacheEntriesGet(c, imBlockBegin);
-    if (entries === undefined) entries = imCacheEntriesSet(c, []);
+    let entries; entries = imGet(c, imBlockBegin);
+    if (entries === undefined) entries = imSet(c, []);
 
     imCacheEntriesPush(c, entries, parentTypeId, parent);
 
@@ -301,8 +303,11 @@ export function imBlockEnd(c: ImCache) {
     }
 
     const idx = entries[ENTRIES_IDX];
-    if (idx < entries[ENTRIES_LAST_IDX]) {
-
+    const lastIdx = entries[ENTRIES_LAST_IDX];
+    if (idx !== (ENTRIES_ITEMS_START - 2)) {
+        if (lastIdx !== (ENTRIES_ITEMS_START - 2) && lastIdx !== lastIdx) {
+            throw new Error("You should be rendering the same number of things in every render cycle");
+        }
     }
 
     return imCacheEntriesPop(c);
@@ -316,6 +321,11 @@ export function __imDerivedBlockBegin(c: ImCache) {
     imBlockBegin(c, parentType, parent);
 
     return entries;
+}
+
+function isFirstishRender(c: ImCache): boolean {
+    const entries = c[CACHE_CURRENT_ENTRIES];
+    return entries[ENTRIES_LAST_IDX] === (ENTRIES_ITEMS_START - 2);
 }
 
 export function __imDerivedBlockEnd(c: ImCache) {
@@ -335,7 +345,8 @@ export function __imDerivedBlockEnd(c: ImCache) {
     // }
     // imConditionalBlockEnd();
     //
-    // Will automatically isolate the next immediate mode call-sites with zero further effort required.
+    // Will automatically isolate the next immediate mode call-sites with zero further effort required,
+    // because all the entries will go into a single array which always takes up just 1 slot in the entries list.
     // It's a bit confusing why there isn't more logic here though, I guess.
     //
     // NOTE: I've now moved this functionality into core. Your immediate mode tree builder will need
@@ -345,25 +356,131 @@ export function __imDerivedBlockEnd(c: ImCache) {
 }
 
 function imIf(c: ImCache): true {
-    __imDerivedBlockBegin(c);
-        __imDerivedBlockBegin(c);
+    __imBlockBeginArray(c);
+        __imConditionalBlockBegin(c);
     return true;
 }
 
-function imElse(c: ImCache): true {
-        __imDerivedBlockEnd(c);
-        __imDerivedBlockBegin(c);
+function imIfElse(c: ImCache): true {
+        __imConditionalBlockEnd(c);
+        __imConditionalBlockBegin(c);
     return true;
 }
 
 function imIfEnd(c: ImCache) {
-        __imDerivedBlockEnd(c);
+        __imConditionalBlockEnd(c);
+    __imBlockArrayEnd(c);
+}
+
+function __imBlockBeginArray(c: ImCache) {
+    __imDerivedBlockBegin(c);
+}
+
+function __imConditionalBlockBegin(c: ImCache) {
+    __imDerivedBlockBegin(c);
+}
+
+function __imConditionalBlockEnd(c: ImCache) {
+    const entries = c[CACHE_CURRENT_ENTRIES];
+    if (entries[ENTRIES_IDX] === ENTRIES_ITEMS_START - 2) {
+        imCacheEntriesOnRemove(entries);
+    }
+
     __imDerivedBlockEnd(c);
 }
 
-///////////////////////////////////////////////
-// User code starts here
+function imFor(c: ImCache) {
+    __imBlockBeginArray(c);
+}
 
+function imForEnd(c: ImCache) {
+    __imBlockArrayEnd(c);
+}
+
+function __imBlockArrayEnd(c: ImCache) {
+    const entries = c[CACHE_CURRENT_ENTRIES]
+
+    const idx = entries[ENTRIES_IDX];
+    const lastIdx = entries[ENTRIES_LAST_IDX];
+    if (idx < lastIdx) {
+        // These entries have left the conditional rendering pathway
+        for (let i = idx + 2; i <= lastIdx; i += 2) {
+            const t = entries[i];
+            const v = entries[i + 1];
+            if (t === imBlockBegin) {
+                imCacheEntriesOnRemove(v);
+            }
+        }
+    }
+
+    // we allow growing this list in particular
+    entries[ENTRIES_LAST_IDX] = idx; 
+
+    __imDerivedBlockEnd(c1);
+}
+
+
+const MEMO_INITIAL_VALUE = {};
+
+export const MEMO_NOT_CHANGED  = 0;
+/** returned by {@link imMemo} if the value changed */
+export const MEMO_CHANGED      = 1; 
+/** 
+ * returned by {@link imMemo} if this is simply the first render. 
+ * Most of the time the distinction is not important, but sometimes,
+ * you want to happen on a change but NOT the initial renderer.
+ */
+export const MEMO_FIRST_RENDER = 2;
+/** 
+ * returned by {@link imMemo} if this is is caused by the component
+ * re-entering the conditional rendering codepath.
+ */
+export const MEMO_FIRST_RENDER_CONDITIONAL = 3;
+
+export type ImMemoResult
+    = typeof MEMO_NOT_CHANGED
+    | typeof MEMO_CHANGED 
+    // NOTE: we've lost the ability to detect this correclty without a second state entry specifically for this, which I probably won't add.
+    // TODO: remove this once we confirm it's never used
+    | typeof MEMO_FIRST_RENDER 
+    | typeof MEMO_FIRST_RENDER_CONDITIONAL;
+
+// NOTE: if val starts off as undefined, this may never go off...
+function imMemo(c: ImCache, val: unknown): ImMemoResult {
+    // NOTE: I had previously implemented imBeginMemo() and imEndMemo():
+    // ```
+    // if (imBeginMemo().val(x).objectVals(obj)) {
+    //      <Memoized component>
+    // } imEndMemo();
+    // ```
+    // It's pretty straightforward to implement - just memorize the dom index and the state index,
+    // ensure it returns true the first time so that you always have some components,
+    // and then onwards, if the values are the same, just advance the dom index and state index.
+    // else, return true and allow the rendering code to do this for you, and cache the new offsets
+    // in imEndMemo. Looks great right? Ended up with all sorts of stale state bugs so I deleted it.
+    // It's just not worth it ever, imo.
+    //
+    // I also previously had imMemoMany(), imMemoArray() and imMemoObjectVals, but these are a slipperly slope
+    // to imMemoDeep() which I definately don't want to ever implement. Also I was basically never using them. So I
+    // have deleted them.
+
+    let result: ImMemoResult = MEMO_NOT_CHANGED;
+
+    const entries = c[CACHE_CURRENT_ENTRIES];
+
+    let lastVal = imGet(c, inlineTypeId(imMemo));
+    if (lastVal !== val) {
+        imSet(c, val);
+        result = MEMO_CHANGED;
+    } else if (entries[ENTRIES_STARTED_CONDITIONALLY_RENDERING] === true) {
+        result = MEMO_FIRST_RENDER_CONDITIONAL;
+    }
+
+    return result;
+}
+
+///////////////////////////////////////////////
+// UI Layer code starts here
 
 export type ValidElement = HTMLElement | SVGElement;
 
@@ -419,133 +536,130 @@ export function appendToDomRoot(domAppender: DomAppender, child: AppendableEleme
 
 // We can now memoize on an object reference instead of a string
 type KeyRef<K> = { val: K };
-export const El = {
-    A: { val: "a" },
-    Abbr: { val: "abbr" },
-    Address: { val: "address" },
-    Area: { val: "area" },
-    Article: { val: "article" },
-    Aside: { val: "aside" },
-    Audio: { val: "audio" },
-    B: { val: "b" },
-    Base: { val: "base" },
-    Bdi: { val: "bdi" },
-    Bdo: { val: "bdo" },
-    Blockquote: { val: "blockquote" },
-    Body: { val: "body" },
-    Br: { val: "br" },
-    Button: { val: "button" },
-    Canvas: { val: "canvas" },
-    Caption: { val: "caption" },
-    Cite: { val: "cite" },
-    Code: { val: "code" },
-    Col: { val: "col" },
-    Colgroup: { val: "colgroup" },
-    Data: { val: "data" },
-    Datalist: { val: "datalist" },
-    Dd: { val: "dd" },
-    Del: { val: "del" },
-    Details: { val: "details" },
-    Dfn: { val: "dfn" },
-    Dialog: { val: "dialog" },
-    Div: { val: "div" },
-    Dl: { val: "dl" },
-    Dt: { val: "dt" },
-    Em: { val: "em" },
-    Embed: { val: "embed" },
-    Fieldset: { val: "fieldset" },
-    Figcaption: { val: "figcaption" },
-    Figure: { val: "figure" },
-    Footer: { val: "footer" },
-    Form: { val: "form" },
-    H1: { val: "h1" },
-    H2: { val: "h2" },
-    H3: { val: "h3" },
-    H4: { val: "h4" },
-    H5: { val: "h5" },
-    H6: { val: "h6" },
-    Head: { val: "head" },
-    Header: { val: "header" },
-    Hgroup: { val: "hgroup" },
-    Hr: { val: "hr" },
-    Html: { val: "html" },
-    I: { val: "i" },
-    Iframe: { val: "iframe" },
-    Img: { val: "img" },
-    Input: { val: "input" },
-    Ins: { val: "ins" },
-    Kbd: { val: "kbd" },
-    Label: { val: "label" },
-    Legend: { val: "legend" },
-    Li: { val: "li" },
-    Link: { val: "link" },
-    Main: { val: "main" },
-    Map: { val: "map" },
-    Mark: { val: "mark" },
-    Menu: { val: "menu" },
-    Meta: { val: "meta" },
-    Meter: { val: "meter" },
-    Nav: { val: "nav" },
-    Noscript: { val: "noscript" },
-    Object: { val: "object" },
-    Ol: { val: "ol" },
-    Optgroup: { val: "optgroup" },
-    Option: { val: "option" },
-    Output: { val: "output" },
-    P: { val: "p" },
-    Picture: { val: "picture" },
-    Pre: { val: "pre" },
-    Progress: { val: "progress" },
-    Q: { val: "q" },
-    Rp: { val: "rp" },
-    Rt: { val: "rt" },
-    Ruby: { val: "ruby" },
-    S: { val: "s" },
-    Samp: { val: "samp" },
-    Script: { val: "script" },
-    Search: { val: "search" },
-    Section: { val: "section" },
-    Select: { val: "select" },
-    Slot: { val: "slot" },
-    Small: { val: "small" },
-    Source: { val: "source" },
-    Span: { val: "span" },
-    Strong: { val: "strong" },
-    Style: { val: "style" },
-    Sub: { val: "sub" },
-    Summary: { val: "summary" },
-    Sup: { val: "sup" },
-    Table: { val: "table" },
-    Tbody: { val: "tbody" },
-    Td: { val: "td" },
-    Template: { val: "template" },
-    Textarea: { val: "textarea" },
-    Tfoot: { val: "tfoot" },
-    Th: { val: "th" },
-    Thead: { val: "thead" },
-    Time: { val: "time" },
-    Title: { val: "title" },
-    Tr: { val: "tr" },
-    Track: { val: "track" },
-    U: { val: "u" },
-    Ul: { val: "ul" },
-    Var: { val: "var" },
-    Video: { val: "video" },
-    Wbr: { val: "wbr" },
-} as const;
+export const EL_A = { val: "a" } as const;
+export const EL_ABBR = { val: "abbr" } as const;
+export const EL_ADDRESS = { val: "address" } as const;
+export const EL_AREA = { val: "area" } as const;
+export const EL_ARTICLE = { val: "article" } as const;
+export const EL_ASIDE = { val: "aside" } as const;
+export const EL_AUDIO = { val: "audio" } as const;
+export const EL_B = { val: "b" } as const;
+export const EL_BASE = { val: "base" } as const;
+export const EL_BDI = { val: "bdi" } as const;
+export const EL_BDO = { val: "bdo" } as const;
+export const EL_BLOCKQUOTE = { val: "blockquote" } as const;
+export const EL_BODY = { val: "body" } as const;
+export const EL_BR = { val: "br" } as const;
+export const EL_BUTTON = { val: "button" } as const;
+export const EL_CANVAS = { val: "canvas" } as const;
+export const EL_CAPTION = { val: "caption" } as const;
+export const EL_CITE = { val: "cite" } as const;
+export const EL_CODE = { val: "code" } as const;
+export const EL_COL = { val: "col" } as const;
+export const EL_COLGROUP = { val: "colgroup" } as const;
+export const EL_DATA = { val: "data" } as const;
+export const EL_DATALIST = { val: "datalist" } as const;
+export const EL_DD = { val: "dd" } as const;
+export const EL_DEL = { val: "del" } as const;
+export const EL_DETAILS = { val: "details" } as const;
+export const EL_DFN = { val: "dfn" } as const;
+export const EL_DIALOG = { val: "dialog" } as const;
+export const EL_DIV = { val: "div" } as const;
+export const EL_DL = { val: "dl" } as const;
+export const EL_DT = { val: "dt" } as const;
+export const EL_EM = { val: "em" } as const;
+export const EL_EMBED = { val: "embed" } as const;
+export const EL_FIELDSET = { val: "fieldset" } as const;
+export const EL_FIGCAPTION = { val: "figcaption" } as const;
+export const EL_FIGURE = { val: "figure" } as const;
+export const EL_FOOTER = { val: "footer" } as const;
+export const EL_FORM = { val: "form" } as const;
+export const EL_H1 = { val: "h1" } as const;
+export const EL_H2 = { val: "h2" } as const;
+export const EL_H3 = { val: "h3" } as const;
+export const EL_H4 = { val: "h4" } as const;
+export const EL_H5 = { val: "h5" } as const;
+export const EL_H6 = { val: "h6" } as const;
+export const EL_HEAD = { val: "head" } as const;
+export const EL_HEADER = { val: "header" } as const;
+export const EL_HGROUP = { val: "hgroup" } as const;
+export const EL_HR = { val: "hr" } as const;
+export const EL_HTML = { val: "html" } as const;
+export const EL_I = { val: "i" } as const;
+export const EL_IFRAME = { val: "iframe" } as const;
+export const EL_IMG = { val: "img" } as const;
+export const EL_INPUT = { val: "input" } as const;
+export const EL_INS = { val: "ins" } as const;
+export const EL_KBD = { val: "kbd" } as const;
+export const EL_LABEL = { val: "label" } as const;
+export const EL_LEGEND = { val: "legend" } as const;
+export const EL_LI = { val: "li" } as const;
+export const EL_LINK = { val: "link" } as const;
+export const EL_MAIN = { val: "main" } as const;
+export const EL_MAP = { val: "map" } as const;
+export const EL_MARK = { val: "mark" } as const;
+export const EL_MENU = { val: "menu" } as const;
+export const EL_META = { val: "meta" } as const;
+export const EL_METER = { val: "meter" } as const;
+export const EL_NAV = { val: "nav" } as const;
+export const EL_NOSCRIPT = { val: "noscript" } as const;
+export const EL_OBJECT = { val: "object" } as const;
+export const EL_OL = { val: "ol" } as const;
+export const EL_OPTGROUP = { val: "optgroup" } as const;
+export const EL_OPTION = { val: "option" } as const;
+export const EL_OUTPUT = { val: "output" } as const;
+export const EL_P = { val: "p" } as const;
+export const EL_PICTURE = { val: "picture" } as const;
+export const EL_PRE = { val: "pre" } as const;
+export const EL_PROGRESS = { val: "progress" } as const;
+export const EL_Q = { val: "q" } as const;
+export const EL_RP = { val: "rp" } as const;
+export const EL_RT = { val: "rt" } as const;
+export const EL_RUBY = { val: "ruby" } as const;
+export const EL_S = { val: "s" } as const;
+export const EL_SAMP = { val: "samp" } as const;
+export const EL_SCRIPT = { val: "script" } as const;
+export const EL_SEARCH = { val: "search" } as const;
+export const EL_SECTION = { val: "section" } as const;
+export const EL_SELECT = { val: "select" } as const;
+export const EL_SLOT = { val: "slot" } as const;
+export const EL_SMALL = { val: "small" } as const;
+export const EL_SOURCE = { val: "source" } as const;
+export const EL_SPAN = { val: "span" } as const;
+export const EL_STRONG = { val: "strong" } as const;
+export const EL_STYLE = { val: "style" } as const;
+export const EL_SUB = { val: "sub" } as const;
+export const EL_SUMMARY = { val: "summary" } as const;
+export const EL_SUP = { val: "sup" } as const;
+export const EL_TABLE = { val: "table" } as const;
+export const EL_TBODY = { val: "tbody" } as const;
+export const EL_TD = { val: "td" } as const;
+export const EL_TEMPLATE = { val: "template" } as const;
+export const EL_TEXTAREA = { val: "textarea" } as const;
+export const EL_TFOOT = { val: "tfoot" } as const;
+export const EL_TH = { val: "th" } as const;
+export const EL_THEAD = { val: "thead" } as const;
+export const EL_TIME = { val: "time" } as const;
+export const EL_TITLE = { val: "title" } as const;
+export const EL_TR = { val: "tr" } as const;
+export const EL_TRACK = { val: "track" } as const;
+export const EL_U = { val: "u" } as const;
+export const EL_UL = { val: "ul" } as const;
+export const EL_VAR = { val: "var" } as const;
+export const EL_VIDEO = { val: "video" } as const;
+export const EL_WBR = { val: "wbr" } as const;
 
-
-export function imElBegin<K extends keyof HTMLElementTagNameMap>(
+export function imEl<K extends keyof HTMLElementTagNameMap>(
     c: ImCache,
     r: KeyRef<K>
 ): DomAppender<HTMLElementTagNameMap[K]> {
     // Make this entry in the current entry list, so we can delete it easily
-    const appender = imCacheEntriesGetParent(c, newDomAppender);
+    const appender = imGetParent(c, newDomAppender);
 
-    let childAppender: DomAppender<HTMLElementTagNameMap[K]> | undefined = imCacheEntriesGet(c, newDomAppender);
+    let childAppender: DomAppender<HTMLElementTagNameMap[K]> | undefined = imGet(c, newDomAppender);
     if (childAppender === undefined) {
         const element = document.createElement(r.val);
-        childAppender = imCacheEntriesSet(c, newDomAppender(element));
+        childAppender = imSet(c, newDomAppender(element));
         childAppender.ref = r;
     }
 
@@ -559,17 +673,17 @@ export function imElBegin<K extends keyof HTMLElementTagNameMap>(
 }
 
 export function imElEnd(c: ImCache, r: KeyRef<keyof HTMLElementTagNameMap>) {
-    const appender = imCacheEntriesGetParent(c, newDomAppender);
+    const appender = imGetParent(c, newDomAppender);
     assert(appender.ref === r) // make sure we're popping the right thing
     finalizeDomAppender(appender);
     imBlockEnd(c);
 }
 
 
-function imDomRootBegin(c: ImCache, root: ValidElement) {
-    let appender = imCacheEntriesGet(c, newDomAppender);
+function imDomRoot(c: ImCache, root: ValidElement) {
+    let appender = imGet(c, newDomAppender);
     if (appender === undefined) {
-        appender = imCacheEntriesSet(c, newDomAppender(root));
+        appender = imSet(c, newDomAppender(root));
         appender.ref = root;
     }
 
@@ -581,7 +695,7 @@ function imDomRootBegin(c: ImCache, root: ValidElement) {
 }
 
 function imDomRootEnd(c: ImCache, root: ValidElement) {
-    let appender = imCacheEntriesGetParent(c, newDomAppender);
+    let appender = imGetParent(c, newDomAppender);
     assert(appender.ref === root);
     finalizeDomAppender(appender);
 
@@ -589,90 +703,159 @@ function imDomRootEnd(c: ImCache, root: ValidElement) {
 }
 
 
-function imText(c: ImCache, text: string): Text {
-    let textNode; textNode = imCacheEntriesGet(c, imText);
-    if (textNode === undefined) textNode = imCacheEntriesSet(c, document.createTextNode(text));
+interface Stringifyable {
+    toString(): string;
+}
 
-    // The user can't select this text node if we're constantly setting it
-    if (textNode.nodeValue !== text) textNode.nodeValue = text;
+function imAddStr(c: ImCache, value: Stringifyable): Text {
+    let textNode; textNode = imGet(c, imAddStr);
+    if (textNode === undefined) textNode = imSet(c, document.createTextNode(""));
 
-    const domAppender = imCacheEntriesGetParent(c, newDomAppender);
+    // The user can't select this text node if we're constantly setting it, so it's behind a cache
+    let lastValue = imGet(c, inlineTypeId(document.createTextNode));
+    if (lastValue !== value) {
+        imSet(c, value);
+        textNode.nodeValue = value.toString();
+    }
+
+    const domAppender = imGetParent(c, newDomAppender);
     appendToDomRoot(domAppender, textNode);
 
     return textNode;
 }
 
+export function elSetStyle<K extends (keyof ValidElement["style"])>(
+    c: ImCache,
+    key: K,
+    value: string
+) {
+    const entries = c[CACHE_CURRENT_ENTRIES];
+    const domAppender = imGetParent(c, newDomAppender);
+    domAppender.root.style[key] = value;
+}
+
+
+///////////////////////////////////////////////
+// Application code starts here
 
 
 // TODO:
 // - Core:
 //      - imMemo
-// - User:
-//      - [ ] im conditional block
-//       - [ ] im-if, imelseif, im else
-//       - [ ] im switch
+//      - [ ] im switch
 //      - [ ] im for
+//      - [ ] im try catch
+// - User:
+//      - recreate our random-stuff.ts
 
+const c1: ImCache = [];
 
-// Case 1:
-// - Entries
-//      - first=domApender, rest=children
-//
-//      - easy for each entry to find the dom appender. but how do we delete?
-//      for i in entries[0,len,2]:
-//          if entries[i] === imBlockBegin:
-//              if entries[i+1][ENTRIES_ITEMS_START] === newDomAppender:
-//                  entries[i+1][ENTRIES_ITEMS_START + 1].root.remove();
-//                  onRemove(^)
-//      - Yeah. if deleting is hard, everything else will be hard. so this is a no go.
-//                  
-//
-//
-// Case 2:
-// - domAppender
-// - entries
-//
-// - easy to delete. But how does each entry knowo about `domAppender` ?
-//      - const parentEntries = c[c[CACHE_IDX] - 1];
-//        assert(current[current[ENTRIES_IDX]] === newDomAppender);
-//        const domAppender = current[current[ENTRIES_IDX] + 1];
-//      - even though it is the more frequent op, it should keep the codebase simpler. we can also cache the parent. 
-//
-// Case 3:
-// - why not just put it in both places??? <------- [x]
-//
+let toggleA = false;
+let toggleB = false;
 
-const c: ImCacheEntries = [];
-
-let toggle = false;
+const changeEvents: string[] = [];
 
 function imMain() {
-    imCacheBegin(c); {
-        imDomRootBegin(c, document.body); {
-            if (imIf(c) && toggle) {
-                imElBegin(c, El.Div); {
-                    imText(c, "Henlo");
-                } imElEnd(c, El.Div);
-            } else {
-                imElse(c);
+    imCache(c1); {
+        imDomRoot(c1, document.body); {
+            imEl(c1,EL_H1); {
+                imAddStr(c1, "Im memo changes");
+            } imElEnd(c1, EL_H1);
 
-                imElBegin(c, El.B); {
-                    imText(c, "G bye");
-                } imElEnd(c, El.B);
-            } imIfEnd(c);
-            imElBegin(c, El.Div); {
-                imText(c, "Bro");
-                imText(c, "!");
-            } imElEnd(c, El.Div);
-        } imDomRootEnd(c, document.body);
-    } imCacheEnd(c);
+
+            let i = 0;
+            imFor(c1); for (const change of changeEvents) {
+                imEl(c1, EL_DIV); {
+                    imAddStr(c1, i++); 
+                    imAddStr(c1, ":"); 
+                    imAddStr(c1, change);
+                } imElEnd(c1, EL_DIV);
+            } imForEnd(c1);
+
+            imEl(c1, EL_DIV); {
+                if (isFirstishRender(c1)) {
+                    elSetStyle(c1, "height", "2px");
+                    elSetStyle(c1, "backgroundColor", "black");
+                }
+            } imElEnd(c1, EL_DIV);
+
+            imEl(c1, EL_DIV); { imAddStr(c1, `toggleA: ${toggleA}, toggleB: ${toggleB}`); } imElEnd(c1, EL_DIV);
+            imEl(c1, EL_DIV); { imAddStr(c1, `expected: ${toggleA ? (toggleB ? "A" : "B"): (toggleB ? "C": "D")}`); } imElEnd(c1, EL_DIV);
+
+            if (imIf(c1) && toggleA) {
+                if (imIf(c1) && toggleB) {
+                    if (imIf(c1) && toggleB) {
+                        if (imMemo(c1, toggleB)) {
+                            changeEvents.push("A");
+                            stabilized = false;
+                        }
+
+                        imEl(c1, EL_DIV); {
+                            imAddStr(c1, "A");
+                        } imElEnd(c1, EL_DIV);
+                    } imIfEnd(c1);
+                } else {
+                    imIfElse(c1);
+
+                    if (imMemo(c1, toggleB)) {
+                        changeEvents.push("B");
+                        stabilized = false;
+                    }
+
+                    imEl(c1, EL_DIV); {
+                        imAddStr(c1, "B");
+                    } imElEnd(c1, EL_DIV);
+                } imIfEnd(c1);
+            } else {
+                imIfElse(c1);
+                if (imIf(c1) && toggleB) {
+                    if (imMemo(c1, toggleB)) {
+                        changeEvents.push("C");
+                        stabilized = false;
+                    }
+
+                    imEl(c1, EL_DIV); {
+                        imAddStr(c1, "C");
+                    } imElEnd(c1, EL_DIV);
+                } else {
+                    imIfElse(c1);
+
+                    if (imMemo(c1, toggleB)) {
+                        changeEvents.push("D");
+                        stabilized = false;
+                    }
+
+                    imEl(c1, EL_DIV); {
+                        imAddStr(c1, "D");
+                    } imElEnd(c1, EL_DIV);
+                } imIfEnd(c1);
+            } imIfEnd(c1);
+            imEl(c1, EL_DIV); {
+                imAddStr(c1, "Bro");
+                imAddStr(c1, "!");
+            } imElEnd(c1, EL_DIV);
+        } imDomRootEnd(c1, document.body);
+    } imCacheEnd(c1);
 }
 
+let stabilized = false;
+let numRerenders = 0;
 imMain();
 
-document.addEventListener("keydown", () => {
-    toggle = !toggle;
-    imMain();
+document.addEventListener("keydown", (e) => {
+    numRerenders = 0;
+    stabilized = false;
+    while (!stabilized && numRerenders++ < 10) {
+        stabilized = true;
+        imMain();
+    }
+
+    if (e.key === "1") {
+        toggleA = !toggleA;
+    }
+    if (e.key === "2") {
+        toggleB = !toggleB;
+    }
 });
 
 // TODO: userland code
