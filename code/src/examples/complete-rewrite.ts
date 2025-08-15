@@ -1,3 +1,4 @@
+import { imBegin } from "src/components/core/layout";
 import { assert } from "src/utils/assert";
 
 // NOTE: I've got no idea if this is actually faster than just using objects - I'm just trying something out.
@@ -20,6 +21,9 @@ const ENTRIES_PARENT_TYPE = 8;
 const ENTRIES_PARENT_VALUE = 9;
 const ENTRIES_ITEMS_START = 10; 
 
+// Allows us to cache state for our immediate mode callsites.
+// Initially started using array indices instead of object+fields to see what would happen.
+// A lot of code paths have actually been simplified as a result at the expense of type safety... (worth it)
 export type ImCache = (ImCacheEntries | any)[];
 const CACHE_IDX = 0;
 const CACHE_CURRENT_ENTRIES = 1;
@@ -840,6 +844,7 @@ let toggleB = false;
 const changeEvents: string[] = [];
 
 let currentExample = 0;
+let globalIsAnimating = false;
 
 function imMain() {
     imCache(c1); {
@@ -850,27 +855,39 @@ function imMain() {
                     elSetStyle(c1, "gap", "10px");
                 }
 
-                const button1 = imButton(c1); {
+                imButton(c1); {
                     imStr(c1, "Conditional rendering, memo, array block");
-                    if (elWasClicked(button1.root)) {
-                        currentExample = 0;
-                    }
+                    if (elWasClicked(c1)) currentExample = 0;
+                } imButtonEnd(c1);
+                imButton(c1); {
+                    imStr(c1, "Error boundaries");
+                    if (elWasClicked(c1)) currentExample = 1;
+                } imButtonEnd(c1);
+                imButton(c1); {
+                    imStr(c1, "Realtime rendering");
+                    if (elWasClicked(c1)) currentExample = 2;
                 } imButtonEnd(c1);
 
-
-                const button2 = imButton(c1); {
-                    imStr(c1, "Example 2");
-                    if (elWasClicked(button2.root)) {
-                        currentExample = 1;
+                imEl(c1, EL_DIV); {
+                    if (isFirstishRender(c1)) {
+                        elSetStyle(c1, "flex", "1");
                     }
-                } imButtonEnd(c1);
+                } imElEnd(c1, EL_DIV);
+
+                imEl(c1, EL_DIV); {
+                    if (imIf(c1) && globalIsAnimating) {
+                        imStr(c1, "[ Animation in progress ]");
+                    } imIfEnd(c1);
+                } imElEnd(c1, EL_DIV);
             } imElEnd(c1, EL_DIV);
 
             imDivider(c1);
 
+            // TODO: convert these into automated tests
             imSwitch(c1, currentExample); switch(currentExample) {
                 case 0: imViewMemoExample(c1); break;
                 case 1: imViewErrorBoundaryExample(c1); break;
+                case 2: imViewRealtimeExample(c1); break;
             } imSwitchEnd(c1);
 
         } imDomRootEnd(c1, document.body);
@@ -949,26 +966,152 @@ function imViewErrorBoundaryExample(c: ImCache) {
             const { err, recover } = tryState;
 
             imIf(c); if (err) {
-
                 imEl(c, EL_DIV); imStr(c, "Your component encountered an error:"); imElEnd(c, EL_DIV);
                 imEl(c, EL_DIV); imStr(c, err); imElEnd(c, EL_DIV);
                 imEl(c, EL_DIV); imStr(c, "(Why don't we do this for the root of the program xDD)"); imElEnd(c, EL_DIV);
 
-                const button = imButton(c); imStr(c, "Recover!"); imButtonEnd(c);
-                if (elWasClicked(button.root)) {
-                    recover();
-                }
+                imButton(c); {
+                    imStr(c, "<Undo>"); 
+                    if (elWasClicked(c)) {
+                        recover();
+                    } 
+                } imButtonEnd(c);
             } else {
                 imIfElse(c);
 
-                const button = imButton(c); imStr(c, "Red button (use your imagination for this one, apologies)"); imButtonEnd(c);
-                if (elWasClicked(button.root)) {
-                    throw new Error("nooo your not supposed to actually press it!");
-                }
+                imButton(c); {
+                    imStr(c, "Red button (use your imagination for this one, apologies)"); 
+                    if (elWasClicked(c)) {
+                        throw new Error("nooo your not supposed to actually press it! You have now initiated the eventual heat-death of the universe.");
+                    }
+                } imButtonEnd(c);
             } imIfEnd(c);
         } catch(err) {
             imTryCatch(c, tryState, err);
         } imTryEnd(c, tryState);
+    } imElEnd(c, EL_DIV);
+}
+
+function imViewRealtimeExample(c: ImCache) {
+    imEl(c, EL_H1); imStr(c, "Realtime animations example"); imElEnd(c, EL_H1);
+
+    imDivider(c);
+
+    let currentExampleState; currentExampleState = imGet(c, imDivider);
+    if (!currentExampleState) {
+        currentExampleState = imSet(c, { example: 0 })
+    }
+
+    imEl(c, EL_DIV); {
+        if (isFirstishRender(c)) {
+            elSetStyle(c, "display", "flex");
+            elSetStyle(c, "gap", "10px");
+        }
+
+        imButton(c); {
+            imStr(c, "Sine waves");
+            if (elWasClicked(c)) currentExampleState.example = 0;
+        } imButtonEnd(c);
+        imButton(c); {
+            imStr(c, "Lots of thigns");
+            if (elWasClicked(c)) currentExampleState.example = 1;
+        } imButtonEnd(c);
+    } imElEnd(c, EL_DIV);
+
+    imDivider(c);
+
+    const root = imEl(c, EL_DIV); {
+        root.manualDom = true;
+
+        // You can avoid all this by simply rerendering your whole app.
+        let state; state = imGet(c, imViewRealtimeExample);
+        if (!state) {
+            const SIZE = 1;
+
+            const val = {
+                c: [] as ImCache,
+                entries: [] as ImCacheEntries,
+                isAnimating: false,
+                pingPong: (c: ImCache, t: number, phase: number) => {
+                    imEl(c, EL_DIV); {
+                        if (isFirstishRender(c)) {
+                            elSetStyle(c, "height", SIZE + "px");
+                            elSetStyle(c, "position", "relative");
+                        }
+
+                        imEl(c, EL_DIV); {
+                            if (isFirstishRender(c)) {
+                                elSetStyle(c, "backgroundColor", "black");
+                                elSetStyle(c, "backgroundColor", "black");
+                                elSetStyle(c, "position", "absolute");
+                                elSetStyle(c, "top", "0");
+                                elSetStyle(c, "bottom", "0");
+                                elSetStyle(c, "aspectRatio", "10 / 1");
+                            }
+
+                            const pingPong = 0.5 * (1 + Math.sin((1 * ((t / 1000) + phase)) % (2 * Math.PI)));
+                            elSetStyle(c, "left", "calc(" + (pingPong * 100) + "% - " + SIZE * 10 * (pingPong) + "px)");
+                        } imElEnd(c, EL_DIV);
+
+                    } imElEnd(c, EL_DIV);
+                },
+                animation: (t: number) => {
+                    const c = val.c;
+
+                    const isAnimating = val.entries.length > 0 && val.entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY];
+
+                    // TODO: FPS counter.
+
+                    imCache(c); 
+                    imDomRoot(c, root.root); {
+                        imEl(c, EL_DIV); {
+                            imSwitch(c, currentExampleState.example); switch(currentExampleState.example) {
+                                case 0: {
+                                    imEl(c, EL_H1); imStr(c, "Snake sine thing idx"); imElEnd(c, EL_H1);
+                                    imDivider(c);
+                                    const NUM = 500 / SIZE;
+                                    for (let i = 0; i < NUM; i++) {
+                                        val.pingPong(c, t, (t / 1000) * i / NUM);
+                                    }
+                                } break;
+                                case 1: {
+                                    imEl(c, EL_H1); imStr(c, "infamous 100k tiles bro I have spent a large percentage of my life on thhis page. .. :("); imElEnd(c, EL_H1);
+                                    imDivider(c);
+
+                                    imEl(c, EL_DIV); {
+                                        imStr(c, "TODO!");
+                                    } imElEnd(c, EL_DIV);
+                                } break;
+                            } imSwitchEnd(c);
+                        } imElEnd(c, EL_DIV);
+                    } imDomRootEnd(c, root.root);
+                    imCacheEnd(c);
+
+                    if (isAnimating) {
+                        requestAnimationFrame(val.animation);
+                    } else {
+                        val.isAnimating = false;
+                        globalIsAnimating = false;
+                        requestAnimationFrame(imMain);
+                        console.log("stopped animating");
+                    }
+                }
+            };
+
+            state = imSet(c, val);
+        }
+
+        // Need at least 1 imGet to be in the 
+        state.entries = c[CACHE_CURRENT_ENTRIES];
+        const isAnimating = state.entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY];
+
+        if (imMemo(c, isAnimating) && !state.isAnimating) {
+            console.log("started animating");
+            state.isAnimating = true;
+            globalIsAnimating = true;
+            requestAnimationFrame(state.animation);
+            requestAnimationFrame(imMain);
+        }
     } imElEnd(c, EL_DIV);
 }
 
@@ -977,7 +1120,8 @@ function imButton(c: ImCache) {
 }
 
 const mouseDownElements: ValidElement[] = [];
-function elWasClicked(el: ValidElement) {
+function elWasClicked(c: ImCache) {
+    const el = elGet(c);
     return mouseDownElements.includes(el);
 }
 
@@ -994,9 +1138,7 @@ function imDivider(c: ImCache) {
     } imElEnd(c, EL_DIV);
 }
 
-do {
-    imMain();
-} while (c1[CACHE_NEEDS_RERENDER]);
+do { imMain(); } while (c1[CACHE_NEEDS_RERENDER]);
 
 document.addEventListener("keydown", (e) => {
     if (e.key === "1") {
@@ -1006,9 +1148,7 @@ document.addEventListener("keydown", (e) => {
         toggleB = !toggleB;
     }
 
-    do {
-        imMain();
-    } while (c1[CACHE_NEEDS_RERENDER]);
+    do { imMain(); } while (c1[CACHE_NEEDS_RERENDER]);
 });
 
 
@@ -1019,9 +1159,7 @@ document.addEventListener("mousedown", (e: MouseEvent) => {
         current = current.parentElement;
     }
 
-    do {
-        imMain();
-    } while (c1[CACHE_NEEDS_RERENDER]);
+    do { imMain(); } while (c1[CACHE_NEEDS_RERENDER]);
 
     mouseDownElements.length = 0;
 });
