@@ -16,17 +16,24 @@ const ENTRIES_IS_DERIVED = 4;
 const ENTRIES_STARTED_CONDITIONALLY_RENDERING = 5;
 const ENTRIES_DESTRUCTORS = 6;
 const ENTRIES_KEYED_MAP = 7;
-const ENTRIES_KEYED_MAP_LAST_IDX = 8;
-const ENTRIES_PARENT_TYPE = 9;
-const ENTRIES_PARENT_VALUE = 10;
-const ENTRIES_ITEMS_START = 11; 
+const ENTRIES_PARENT_TYPE = 8;
+const ENTRIES_PARENT_VALUE = 9;
+const ENTRIES_ITEMS_START = 10; 
 
 export type ImCache = (ImCacheEntries | any)[];
 const CACHE_IDX = 0;
 const CACHE_CURRENT_ENTRIES = 1;
 const CACHE_CONTEXTS = 2;
 const CACHE_ROOT_ENTRIES = 3;
-const CACHE_ENTRIES_START = 4;
+const CACHE_NEEDS_RERENDER = 4;
+const CACHE_ENTRIES_START = 5;
+
+
+// NOTE: this only works if you can somehow re-render your program whenever any error occurs.
+// While you can just rerender this every frame in requestAnimationFrame (which is how I plan on using it),
+// I am making it optional, hence CACHE_NEEDS_RERENDER. You could also just rerender on user events, and maintain a queue of 
+// [cache, function] that need realtime updates.
+
 
 export const REMOVE_LEVEL_NONE = 1;
 export const REMOVE_LEVEL_DETATCHED = 2;
@@ -67,9 +74,11 @@ export function imCache(c: ImCache) {
         c[CACHE_CONTEXTS] = [];
         c[CACHE_ROOT_ENTRIES] = [];
         c[CACHE_CURRENT_ENTRIES] = c[CACHE_ROOT_ENTRIES];
+        c[CACHE_NEEDS_RERENDER] = false;
     }
 
     c[CACHE_IDX] = CACHE_ENTRIES_START - 1;
+    c[CACHE_NEEDS_RERENDER] = false;
 
     imCacheEntriesPush(c, c[CACHE_ROOT_ENTRIES], imCache, c);
 
@@ -115,7 +124,6 @@ export function imCacheEntriesPush<T>(
         entries[ENTRIES_PARENT_VALUE] = parent;
         entries[ENTRIES_DESTRUCTORS] = undefined;
         entries[ENTRIES_KEYED_MAP] = undefined;
-        entries[ENTRIES_KEYED_MAP_LAST_IDX] = 0;
     } else {
         assert(entries[ENTRIES_PARENT_TYPE] === parentTypeId);
 
@@ -160,6 +168,17 @@ export function imGet<T>(c: ImCache, typeId: TypeId<T>): T | undefined {
     return entries[idx + 1];
 }
 
+export function imGetAt<T>(c: ImCache, typeId: TypeId<T>, idx: number): T {
+    const entries = c[CACHE_CURRENT_ENTRIES];
+    const type = entries.at(ENTRIES_ITEMS_START + idx);
+    if (type !== typeId) {
+        throw new Error("Didn't find <typeId::" + typeId.name + "> at " + idx);
+    }
+
+    const val = entries[ENTRIES_ITEMS_START + idx + 1];
+    return val as T;
+}
+
 
 export function imGetParent<T>(c: ImCache, typeId: TypeId<T>): T {
     // If this assertion fails, then you may have forgotten to pop some things you've pushed onto the stack
@@ -179,7 +198,7 @@ export function imSet<T>(c: ImCache, val: T): T {
 type ListMapBlock = { rendered: boolean; entries: ImCacheEntries; };
 
 
-export function imBlockKeyedBegin(c: ImCache, key: ValidKey) {
+export function __imBlockKeyed(c: ImCache, key: ValidKey) {
     const entries = c[CACHE_CURRENT_ENTRIES];
     
     let map = entries[ENTRIES_KEYED_MAP] as (Map<ValidKey, ListMapBlock> | undefined);
@@ -188,20 +207,11 @@ export function imBlockKeyedBegin(c: ImCache, key: ValidKey) {
         entries[ENTRIES_KEYED_MAP] = map;
     }
 
-    if (entries[ENTRIES_IDX] < entries[ENTRIES_KEYED_MAP_LAST_IDX]) {
-        // This is probably a new render pass. we can initialize the map here.
-        for (const v of map.values()) {
-            v.rendered = false;
-        }
-    }
-    entries[ENTRIES_KEYED_MAP_LAST_IDX] = entries[ENTRIES_IDX];
-
     let block = map.get(key);
     if (block === undefined) {
         block = { rendered: false, entries: [] };
         map.set(key, block);
     }
-
 
     /**
      * You're rendering this list element twice. You may have duplicate keys in your dataset.
@@ -211,7 +221,7 @@ export function imBlockKeyedBegin(c: ImCache, key: ValidKey) {
      * If you're doing this in an infrequent event, here's a quick fix:
      * {
      *      let deferredAction: () => {};
-     *      imCacheListItemBegin(s);
+     *      imCacheListItem(s);
      *      for (item of list) {
      *          if (event) deferredAction = () => literally same mutation
      *      }
@@ -225,7 +235,9 @@ export function imBlockKeyedBegin(c: ImCache, key: ValidKey) {
 
     block.rendered = true;
 
-    __imDerivedBlockBegin(c);
+    const parentType = entries[ENTRIES_PARENT_TYPE];
+    const parent     = entries[ENTRIES_PARENT_VALUE];
+    imCacheEntriesPush(c, block.entries, parentType, parent);
 }
 
 export function imCacheEntriesAddDestructor(entries: ImCacheEntries, destructor: () => void) {
@@ -245,7 +257,7 @@ export function imCacheEntriesOnRemove(entries: ImCacheEntries) {
         for (let i = ENTRIES_ITEMS_START; i < entries.length; i += 2) {
             const t = entries[i];
             const v = entries[i + 1];
-            if (t === imBlockBegin) {
+            if (t === imBlock) {
                 imCacheEntriesOnRemove(v);
             }
         }
@@ -260,7 +272,7 @@ export function imCacheEntriesOnDestroy(entries: ImCacheEntries) {
         for (let i = ENTRIES_ITEMS_START; i < entries.length; i += 2) {
             const t = entries[i];
             const v = entries[i + 1];
-            if (t === imBlockBegin) {
+            if (t === imBlock) {
                 imCacheEntriesOnDestroy(v);
             }
         }
@@ -279,11 +291,18 @@ export function imCacheEntriesOnDestroy(entries: ImCacheEntries) {
     }
 }
 
-export function imBlockBegin<T>(c: ImCache, parentTypeId: TypeId<T>, parent: T): ImCacheEntries {
-    let entries; entries = imGet(c, imBlockBegin);
+export function imBlock<T>(c: ImCache, parentTypeId: TypeId<T>, parent: T): ImCacheEntries {
+    let entries; entries = imGet(c, imBlock);
     if (entries === undefined) entries = imSet(c, []);
 
     imCacheEntriesPush(c, entries, parentTypeId, parent);
+
+    const map = entries[ENTRIES_KEYED_MAP] as (Map<ValidKey, ListMapBlock> | undefined);
+    if (map !== undefined) {
+        for (const v of map.values()) {
+            v.rendered = false;
+        }
+    }
 
     return entries;
 }
@@ -313,14 +332,12 @@ export function imBlockEnd(c: ImCache) {
     return imCacheEntriesPop(c);
 }
 
-export function __imDerivedBlockBegin(c: ImCache) {
+export function __imBlockDerived(c: ImCache): ImCacheEntries {
     const entries    = c[CACHE_CURRENT_ENTRIES];
     const parentType = entries[ENTRIES_PARENT_TYPE];
     const parent     = entries[ENTRIES_PARENT_VALUE];
 
-    imBlockBegin(c, parentType, parent);
-
-    return entries;
+    return imBlock(c, parentType, parent);
 }
 
 function isFirstishRender(c: ImCache): boolean {
@@ -328,7 +345,7 @@ function isFirstishRender(c: ImCache): boolean {
     return entries[ENTRIES_LAST_IDX] === (ENTRIES_ITEMS_START - 2);
 }
 
-export function __imDerivedBlockEnd(c: ImCache) {
+export function __imBlockDerivedEnd(c: ImCache) {
     // The DOM appender will automatically update and diff the children if they've changed.
     // However we can't just do
     // ```
@@ -356,41 +373,51 @@ export function __imDerivedBlockEnd(c: ImCache) {
 }
 
 function imIf(c: ImCache): true {
-    __imBlockBeginArray(c);
-        __imConditionalBlockBegin(c);
+    __imBlockArray(c);
+        __imBlockConditional(c);
     return true;
 }
 
 function imIfElse(c: ImCache): true {
-        __imConditionalBlockEnd(c);
-        __imConditionalBlockBegin(c);
+        __imBlockConditionalEnd(c);
+        __imBlockConditional(c);
     return true;
 }
 
 function imIfEnd(c: ImCache) {
-        __imConditionalBlockEnd(c);
+        __imBlockConditionalEnd(c);
     __imBlockArrayEnd(c);
 }
 
-function __imBlockBeginArray(c: ImCache) {
-    __imDerivedBlockBegin(c);
+function imSwitch(c: ImCache, key: ValidKey) {
+    __imBlockKeyed(c, key);
 }
 
-function __imConditionalBlockBegin(c: ImCache) {
-    __imDerivedBlockBegin(c);
+function imSwitchEnd(c: ImCache) {
+    // the parent block above this will handle the map, not this block
+
+    __imBlockDerivedEnd(c);
 }
 
-function __imConditionalBlockEnd(c: ImCache) {
+function __imBlockArray(c: ImCache) {
+    __imBlockDerived(c);
+}
+
+function __imBlockConditional(c: ImCache) {
+    __imBlockDerived(c);
+}
+
+function __imBlockConditionalEnd(c: ImCache) {
     const entries = c[CACHE_CURRENT_ENTRIES];
     if (entries[ENTRIES_IDX] === ENTRIES_ITEMS_START - 2) {
         imCacheEntriesOnRemove(entries);
     }
 
-    __imDerivedBlockEnd(c);
+    __imBlockDerivedEnd(c);
 }
 
 function imFor(c: ImCache) {
-    __imBlockBeginArray(c);
+    __imBlockArray(c);
 }
 
 function imForEnd(c: ImCache) {
@@ -407,7 +434,7 @@ function __imBlockArrayEnd(c: ImCache) {
         for (let i = idx + 2; i <= lastIdx; i += 2) {
             const t = entries[i];
             const v = entries[i + 1];
-            if (t === imBlockBegin) {
+            if (t === imBlock) {
                 imCacheEntriesOnRemove(v);
             }
         }
@@ -416,7 +443,7 @@ function __imBlockArrayEnd(c: ImCache) {
     // we allow growing this list in particular
     entries[ENTRIES_LAST_IDX] = idx; 
 
-    __imDerivedBlockEnd(c1);
+    __imBlockDerivedEnd(c1);
 }
 
 
@@ -440,14 +467,14 @@ export const MEMO_FIRST_RENDER_CONDITIONAL = 3;
 export type ImMemoResult
     = typeof MEMO_NOT_CHANGED
     | typeof MEMO_CHANGED 
-    // NOTE: we've lost the ability to detect this correclty without a second state entry specifically for this, which I probably won't add.
+    // NOTE: we've lost the ability to detect MEMO_FIRST_RENDER correctly without a second state entry specifically for this, which I probably won't add.
     // TODO: remove this once we confirm it's never used
     | typeof MEMO_FIRST_RENDER 
     | typeof MEMO_FIRST_RENDER_CONDITIONAL;
 
 // NOTE: if val starts off as undefined, this may never go off...
 function imMemo(c: ImCache, val: unknown): ImMemoResult {
-    // NOTE: I had previously implemented imBeginMemo() and imEndMemo():
+    // NOTE: I had previously implemented imMemo() and imEndMemo():
     // ```
     // if (imBeginMemo().val(x).objectVals(obj)) {
     //      <Memoized component>
@@ -477,6 +504,51 @@ function imMemo(c: ImCache, val: unknown): ImMemoResult {
     }
 
     return result;
+}
+
+
+type TryState = {
+    entries: ImCacheEntries,
+    err: any | null;
+    recover: () => void;
+    // TODO: consider Map<Error, count: number>
+}
+
+function imTry(c: ImCache): TryState {
+    const entries = __imBlockDerived(c);
+
+    let tryState = imGet(c, imTry);
+    if (tryState === undefined) {
+        const val: TryState = {
+            err: null,
+            recover: () => {
+                val.err = null;
+                c[CACHE_NEEDS_RERENDER] = true;
+            },
+            entries,
+        };
+        tryState = imSet(c, val);
+    }
+
+    return tryState;
+}
+
+function imTryCatch(c: ImCache, tryState: TryState, err: any) {
+    c[CACHE_NEEDS_RERENDER] = true;
+    tryState.err = err;
+    const idx = c.lastIndexOf(tryState.entries);
+    if (idx === -1) {
+        throw new Error("Couldn't find the entries in the stack to unwind to!");
+    }
+
+    c[CACHE_IDX] = idx;
+    c[CACHE_CURRENT_ENTRIES] = c[idx];
+}
+
+function imTryEnd(c: ImCache, tryState: TryState) {
+    const val = imGetAt(c, imTry, 0);
+    assert(val === tryState);
+    __imBlockDerivedEnd(c);
 }
 
 ///////////////////////////////////////////////
@@ -512,6 +584,8 @@ export function finalizeDomAppender(appender: DomAppender<ValidElement>) {
         (appender.childrenChanged === true || appender.idx !== appender.lastIdx) &&
         appender.manualDom === false
     ) {
+        // TODO: set up a bigger example, so we can see if optimizing htis makes a difference.
+        // NOTE: the framework doesn't need to guess about what was added and removed in a diffing algorithm, it actually KNOWS!
         // TODO: measure perf impacts.
         // TODO: consider clear, then replace children.
         appender.root.replaceChildren(...appender.children.slice(0, appender.idx + 1));
@@ -665,7 +739,7 @@ export function imEl<K extends keyof HTMLElementTagNameMap>(
 
     appendToDomRoot(appender, childAppender.root);
 
-    imBlockBegin(c, newDomAppender, childAppender);
+    imBlock(c, newDomAppender, childAppender);
 
     childAppender.idx = -1;
 
@@ -687,7 +761,7 @@ function imDomRoot(c: ImCache, root: ValidElement) {
         appender.ref = root;
     }
 
-    imBlockBegin(c, newDomAppender, appender);
+    imBlock(c, newDomAppender, appender);
 
     appender.idx = -1;
 
@@ -707,8 +781,8 @@ interface Stringifyable {
     toString(): string;
 }
 
-function imAddStr(c: ImCache, value: Stringifyable): Text {
-    let textNode; textNode = imGet(c, imAddStr);
+function imStr(c: ImCache, value: Stringifyable): Text {
+    let textNode; textNode = imGet(c, imStr);
     if (textNode === undefined) textNode = imSet(c, document.createTextNode(""));
 
     // The user can't select this text node if we're constantly setting it, so it's behind a cache
@@ -729,9 +803,17 @@ export function elSetStyle<K extends (keyof ValidElement["style"])>(
     key: K,
     value: string
 ) {
-    const entries = c[CACHE_CURRENT_ENTRIES];
     const domAppender = imGetParent(c, newDomAppender);
     domAppender.root.style[key] = value;
+}
+
+export function elGetAppender(c: ImCache) {
+    const domAppender = imGetParent(c, newDomAppender);
+    return domAppender;
+}
+
+export function elGet(c: ImCache) {
+    return elGetAppender(c).root;
 }
 
 
@@ -743,10 +825,12 @@ export function elSetStyle<K extends (keyof ValidElement["style"])>(
 // - Core:
 //      - imMemo
 //      - [ ] im switch
-//      - [ ] im for
 //      - [ ] im try catch
 // - User:
 //      - recreate our random-stuff.ts
+// - Performance testing
+//      - Variadic memo
+//      - Making c1 a global variable
 
 const c1: ImCache = [];
 
@@ -755,107 +839,191 @@ let toggleB = false;
 
 const changeEvents: string[] = [];
 
+let currentExample = 0;
+
 function imMain() {
     imCache(c1); {
         imDomRoot(c1, document.body); {
-            imEl(c1,EL_H1); {
-                imAddStr(c1, "Im memo changes");
-            } imElEnd(c1, EL_H1);
-
-
-            let i = 0;
-            imFor(c1); for (const change of changeEvents) {
-                imEl(c1, EL_DIV); {
-                    imAddStr(c1, i++); 
-                    imAddStr(c1, ":"); 
-                    imAddStr(c1, change);
-                } imElEnd(c1, EL_DIV);
-            } imForEnd(c1);
-
             imEl(c1, EL_DIV); {
                 if (isFirstishRender(c1)) {
-                    elSetStyle(c1, "height", "2px");
-                    elSetStyle(c1, "backgroundColor", "black");
+                    elSetStyle(c1, "display", "flex");
+                    elSetStyle(c1, "gap", "10px");
                 }
+
+                const button1 = imButton(c1); {
+                    imStr(c1, "Conditional rendering, memo, array block");
+                    if (elWasClicked(button1.root)) {
+                        currentExample = 0;
+                    }
+                } imButtonEnd(c1);
+
+
+                const button2 = imButton(c1); {
+                    imStr(c1, "Example 2");
+                    if (elWasClicked(button2.root)) {
+                        currentExample = 1;
+                    }
+                } imButtonEnd(c1);
             } imElEnd(c1, EL_DIV);
 
-            imEl(c1, EL_DIV); { imAddStr(c1, `toggleA: ${toggleA}, toggleB: ${toggleB}`); } imElEnd(c1, EL_DIV);
-            imEl(c1, EL_DIV); { imAddStr(c1, `expected: ${toggleA ? (toggleB ? "A" : "B"): (toggleB ? "C": "D")}`); } imElEnd(c1, EL_DIV);
+            imDivider(c1);
 
-            if (imIf(c1) && toggleA) {
-                if (imIf(c1) && toggleB) {
-                    if (imIf(c1) && toggleB) {
-                        if (imMemo(c1, toggleB)) {
-                            changeEvents.push("A");
-                            stabilized = false;
-                        }
+            imSwitch(c1, currentExample); switch(currentExample) {
+                case 0: imViewMemoExample(c1); break;
+                case 1: imViewErrorBoundaryExample(c1); break;
+            } imSwitchEnd(c1);
 
-                        imEl(c1, EL_DIV); {
-                            imAddStr(c1, "A");
-                        } imElEnd(c1, EL_DIV);
-                    } imIfEnd(c1);
-                } else {
-                    imIfElse(c1);
-
-                    if (imMemo(c1, toggleB)) {
-                        changeEvents.push("B");
-                        stabilized = false;
-                    }
-
-                    imEl(c1, EL_DIV); {
-                        imAddStr(c1, "B");
-                    } imElEnd(c1, EL_DIV);
-                } imIfEnd(c1);
-            } else {
-                imIfElse(c1);
-                if (imIf(c1) && toggleB) {
-                    if (imMemo(c1, toggleB)) {
-                        changeEvents.push("C");
-                        stabilized = false;
-                    }
-
-                    imEl(c1, EL_DIV); {
-                        imAddStr(c1, "C");
-                    } imElEnd(c1, EL_DIV);
-                } else {
-                    imIfElse(c1);
-
-                    if (imMemo(c1, toggleB)) {
-                        changeEvents.push("D");
-                        stabilized = false;
-                    }
-
-                    imEl(c1, EL_DIV); {
-                        imAddStr(c1, "D");
-                    } imElEnd(c1, EL_DIV);
-                } imIfEnd(c1);
-            } imIfEnd(c1);
-            imEl(c1, EL_DIV); {
-                imAddStr(c1, "Bro");
-                imAddStr(c1, "!");
-            } imElEnd(c1, EL_DIV);
         } imDomRootEnd(c1, document.body);
     } imCacheEnd(c1);
 }
 
-let stabilized = false;
-let numRerenders = 0;
-imMain();
+
+function imViewMemoExample(c: ImCache) {
+    imEl(c, EL_H1); {
+        imStr(c, "Im memo changes");
+    } imElEnd(c, EL_H1);
+
+    let i = 0;
+    imFor(c); for (const change of changeEvents) {
+        imEl(c, EL_DIV); {
+            imStr(c, i++);
+            imStr(c, ":");
+            imStr(c, change);
+        } imElEnd(c, EL_DIV);
+    } imForEnd(c);
+
+    imDivider(c);
+
+    imEl(c, EL_DIV); { imStr(c, `toggleA: ${toggleA}, toggleB: ${toggleB}`); } imElEnd(c, EL_DIV);
+    imEl(c, EL_DIV); { imStr(c, `expected: ${toggleA ? (toggleB ? "A" : "B") : (toggleB ? "C" : "D")}`); } imElEnd(c, EL_DIV);
+
+    if (imIf(c) && toggleA) {
+        if (imIf(c) && toggleB) {
+            if (imIf(c) && toggleB) {
+                if (imMemo(c, toggleB)) {
+                    changeEvents.push("A");
+                }
+
+                imEl(c, EL_DIV); imStr(c, "A"); imElEnd(c, EL_DIV);
+            } imIfEnd(c);
+        } else {
+            imIfElse(c);
+
+            if (imMemo(c, toggleB)) {
+                changeEvents.push("B");
+            }
+
+            imEl(c, EL_DIV); imStr(c, "B"); imElEnd(c, EL_DIV);
+        } imIfEnd(c);
+    } else {
+        imIfElse(c);
+        if (imIf(c) && toggleB) {
+            if (imMemo(c, toggleB)) {
+                changeEvents.push("C");
+            }
+
+            imEl(c, EL_DIV); imStr(c, "C"); imElEnd(c, EL_DIV);
+        } else {
+            imIfElse(c);
+
+            if (imMemo(c, toggleB)) {
+                changeEvents.push("D");
+            }
+
+            imEl(c, EL_DIV); imStr(c, "D"); imElEnd(c, EL_DIV);
+        } imIfEnd(c);
+    } imIfEnd(c);
+    imEl(c, EL_DIV); {
+        imStr(c, "Bro");
+        imStr(c, "!");
+    } imElEnd(c, EL_DIV);
+}
+
+function imViewErrorBoundaryExample(c: ImCache) {
+    imEl(c, EL_H1); imStr(c, "Error boundary example"); imElEnd(c, EL_H1);
+
+    imDivider(c);
+
+    imEl(c, EL_DIV); {
+        const tryState = imTry(c); try {
+            const { err, recover } = tryState;
+
+            imIf(c); if (err) {
+
+                imEl(c, EL_DIV); imStr(c, "Your component encountered an error:"); imElEnd(c, EL_DIV);
+                imEl(c, EL_DIV); imStr(c, err); imElEnd(c, EL_DIV);
+                imEl(c, EL_DIV); imStr(c, "(Why don't we do this for the root of the program xDD)"); imElEnd(c, EL_DIV);
+
+                const button = imButton(c); imStr(c, "Recover!"); imButtonEnd(c);
+                if (elWasClicked(button.root)) {
+                    recover();
+                }
+            } else {
+                imIfElse(c);
+
+                const button = imButton(c); imStr(c, "Red button (use your imagination for this one, apologies)"); imButtonEnd(c);
+                if (elWasClicked(button.root)) {
+                    throw new Error("nooo your not supposed to actually press it!");
+                }
+            } imIfEnd(c);
+        } catch(err) {
+            imTryCatch(c, tryState, err);
+        } imTryEnd(c, tryState);
+    } imElEnd(c, EL_DIV);
+}
+
+function imButton(c: ImCache) {
+    return imEl(c, EL_BUTTON); 
+}
+
+const mouseDownElements: ValidElement[] = [];
+function elWasClicked(el: ValidElement) {
+    return mouseDownElements.includes(el);
+}
+
+function imButtonEnd(c: ImCache) {
+    imElEnd(c, EL_BUTTON);
+}
+
+function imDivider(c: ImCache) {
+    imEl(c, EL_DIV); {
+        if (isFirstishRender(c)) {
+            elSetStyle(c, "height", "2px");
+            elSetStyle(c, "backgroundColor", "black");
+        }
+    } imElEnd(c, EL_DIV);
+}
+
+do {
+    imMain();
+} while (c1[CACHE_NEEDS_RERENDER]);
 
 document.addEventListener("keydown", (e) => {
-    numRerenders = 0;
-    stabilized = false;
-    while (!stabilized && numRerenders++ < 10) {
-        stabilized = true;
-        imMain();
-    }
-
     if (e.key === "1") {
         toggleA = !toggleA;
     }
     if (e.key === "2") {
         toggleB = !toggleB;
     }
+
+    do {
+        imMain();
+    } while (c1[CACHE_NEEDS_RERENDER]);
+});
+
+
+document.addEventListener("mousedown", (e: MouseEvent) => {
+    let current = e.target as  ValidElement | null;
+    while (current !== null) {
+        mouseDownElements.push(current);
+        current = current.parentElement;
+    }
+
+    do {
+        imMain();
+    } while (c1[CACHE_NEEDS_RERENDER]);
+
+    mouseDownElements.length = 0;
 });
 
 // TODO: userland code
