@@ -1,840 +1,54 @@
-import { imBegin } from "src/components/core/layout";
-import { assert } from "src/utils/assert";
-
-// NOTE: I've got no idea if this is actually faster than just using objects - I'm just trying something out.
-// Migth be shit, and need rewriting to use normal objects, I've got no idea yet.
-
-export type ImCacheEntries = any[];
-
-// Somewhat important that we store these all at 0.
-
-// TODO: I know one of these two (ENTRIES_REMOVE_LEVEL, ENTRIES_IS_IN_CONDITIONAL_PATHWAY) are redundant. I just can't seem to be able to prove it ...
-const ENTRIES_IDX = 0;
-const ENTRIES_LAST_IDX = 1;
-const ENTRIES_REMOVE_LEVEL = 2;
-const ENTRIES_IS_IN_CONDITIONAL_PATHWAY = 3;
-const ENTRIES_IS_DERIVED = 4;
-const ENTRIES_STARTED_CONDITIONALLY_RENDERING = 5;
-const ENTRIES_DESTRUCTORS = 6;
-const ENTRIES_KEYED_MAP = 7;
-const ENTRIES_PARENT_TYPE = 8;
-const ENTRIES_PARENT_VALUE = 9;
-const ENTRIES_ITEMS_START = 10; 
-
-// Allows us to cache state for our immediate mode callsites.
-// Initially started using array indices instead of object+fields to see what would happen.
-// A lot of code paths have actually been simplified as a result at the expense of type safety... (worth it)
-export type ImCache = (ImCacheEntries | any)[];
-const CACHE_IDX = 0;
-const CACHE_CURRENT_ENTRIES = 1;
-const CACHE_CONTEXTS = 2;
-const CACHE_ROOT_ENTRIES = 3;
-const CACHE_NEEDS_RERENDER = 4;
-const CACHE_ENTRIES_START = 5;
-
-
-// NOTE: this only works if you can somehow re-render your program whenever any error occurs.
-// While you can just rerender this every frame in requestAnimationFrame (which is how I plan on using it),
-// I am making it optional, hence CACHE_NEEDS_RERENDER. You could also just rerender on user events, and maintain a queue of 
-// [cache, function] that need realtime updates.
-
-
-export const REMOVE_LEVEL_NONE = 1;
-export const REMOVE_LEVEL_DETATCHED = 2;
-export const REMOVE_LEVEL_DESTROYED = 3;
-
-export type RemovedLevel
-    = typeof REMOVE_LEVEL_NONE
-    | typeof REMOVE_LEVEL_DETATCHED   // This is the default remove level. The increase in performance far oughtweighs any memory problems. 
-    | typeof REMOVE_LEVEL_DESTROYED;
-
-// TypeIDs allow us to provide some basic sanity checks and protection
-// against the possiblity of data corruption that can happen when im-state is accessed 
-// conditionally or out of order. The idea is that rather than asking you to pass in 
-// some random number, or to save a bunch of type ID integers everywhere, you can 
-// just pass in a reference to a function to uniquely identify a piece of state.
-// You probably have a whole bunch of them lying around somewhere.
-// The function that you are creating the state from, for example. 
-// The return value of the function can be used to infer the return value of
-// the {@link imGetsState} call, but it can also be a completely unrelated function
-// - in which case you can just use {@link imInlineTypeId}. As long as a function
-// has been uniquely used within a particular entry list at a particular slot, the 
-// likelyhood of out-of-order rendering errors will reduce to almost 0.
-export type TypeId<T> = (...args: any[]) => T;
-
-export function inlineTypeId<T = undefined>(fn: Function) {
-    return fn as TypeId<T>;
-}
-
-// Can be any valid object reference. Or string, but avoid string if you can - string comparisons are slower than object comparisons
-export type ValidKey = string | number | Function | object | boolean | null;
-
-export function imCache(c: ImCache) {
-    if (c.length === 0) {
-        c.length = CACHE_ENTRIES_START;
-        // starts at -1 and increments onto the current value. So we can keep accessing this idx over and over without doing idx - 1.
-        // NOTE: memory access is supposedly far slower than math. So might not matter too much
-        c[CACHE_IDX] = 0;
-        c[CACHE_CONTEXTS] = [];
-        c[CACHE_ROOT_ENTRIES] = [];
-        c[CACHE_CURRENT_ENTRIES] = c[CACHE_ROOT_ENTRIES];
-        c[CACHE_NEEDS_RERENDER] = false;
-    }
-
-    c[CACHE_IDX] = CACHE_ENTRIES_START - 1;
-    c[CACHE_NEEDS_RERENDER] = false;
-
-    imCacheEntriesPush(c, c[CACHE_ROOT_ENTRIES], imCache, c);
-
-    return c;
-}
-
-export function imCacheEnd(c: ImCache) {
-    imCacheEntriesPop(c);
-
-    const startIdx = CACHE_ENTRIES_START - 1;
-    if (c[CACHE_IDX] > startIdx) {
-        console.error("You've forgotten to pop some things: ", c.slice(startIdx + 1));
-        throw new Error("You've forgotten to pop some things");
-    } else if (c[CACHE_IDX] < startIdx) {
-        throw new Error("You've popped too many thigns off the stack!!!!");
-    }
-}
-
-export function imCacheEntriesPush<T>(
-    c: ImCache,
-    entries: ImCacheEntries,
-    parentTypeId: TypeId<T>,
-    parent: T
-) {
-    const idx = ++c[CACHE_IDX];
-    if (idx === c.length) {
-        c.push(entries);
-    } else {
-        c[idx] = entries;
-    }
-
-    c[CACHE_CURRENT_ENTRIES] = entries;
-
-    if (entries.length === 0) {
-        entries.length = ENTRIES_ITEMS_START;
-        entries[ENTRIES_IDX] = ENTRIES_ITEMS_START - 2;
-        entries[ENTRIES_LAST_IDX] = ENTRIES_ITEMS_START - 2;
-        entries[ENTRIES_REMOVE_LEVEL] = REMOVE_LEVEL_DETATCHED;
-        entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY] = false;
-        entries[ENTRIES_IS_DERIVED] = false;
-        entries[ENTRIES_STARTED_CONDITIONALLY_RENDERING] = false;
-        entries[ENTRIES_PARENT_TYPE] = parentTypeId;
-        entries[ENTRIES_PARENT_VALUE] = parent;
-        entries[ENTRIES_DESTRUCTORS] = undefined;
-        entries[ENTRIES_KEYED_MAP] = undefined;
-    } else {
-        assert(entries[ENTRIES_PARENT_TYPE] === parentTypeId);
-
-    }
-
-    entries[ENTRIES_IDX] = ENTRIES_ITEMS_START - 2;
-}
-
-export function imCacheEntriesPop(c: ImCache) {
-    const idx = --c[CACHE_IDX];
-    c[CACHE_CURRENT_ENTRIES] = c[idx];
-}
-
-export function imGet<T>(c: ImCache, typeId: TypeId<T>): T | undefined {
-    const entries = c[CACHE_CURRENT_ENTRIES];
-
-    entries[ENTRIES_IDX] += 2;
-    const idx = entries[ENTRIES_IDX];
-    if (idx === ENTRIES_ITEMS_START) {
-        // Need to respond to conditional rendering when we render the first item, because rendering 0 items is the signal to not conditionally render.
-        if (entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY] === false) {
-            entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY] = true;
-            entries[ENTRIES_STARTED_CONDITIONALLY_RENDERING] = true;
-            entries[ENTRIES_REMOVE_LEVEL] = REMOVE_LEVEL_NONE;
-        } else {
-            // NOTE: if an error occured in the previous render, then
-            // subsequent things that depended on `startedConditionallyRendering` being true won't run.
-            // I think this is better than re-running all the things that ran successfully over and over again.
-            entries[ENTRIES_STARTED_CONDITIONALLY_RENDERING] = false;
-        }
-    }
-
-    assert(idx <= entries.length + 1);
-
-    if (idx === entries.length) {
-        entries.push(typeId);
-        entries.push(undefined);
-    } else {
-        assert(entries[idx] === typeId);
-    }
-
-    return entries[idx + 1];
-}
-
-export function imGetAt<T>(c: ImCache, typeId: TypeId<T>, idx: number): T {
-    const entries = c[CACHE_CURRENT_ENTRIES];
-    const type = entries.at(ENTRIES_ITEMS_START + idx);
-    if (type !== typeId) {
-        throw new Error("Didn't find <typeId::" + typeId.name + "> at " + idx);
-    }
-
-    const val = entries[ENTRIES_ITEMS_START + idx + 1];
-    return val as T;
-}
-
-
-export function imGetParent<T>(c: ImCache, typeId: TypeId<T>): T {
-    // If this assertion fails, then you may have forgotten to pop some things you've pushed onto the stack
-    const entries = c[CACHE_CURRENT_ENTRIES];
-    assert(entries[ENTRIES_PARENT_TYPE] === typeId);
-    return entries[ENTRIES_PARENT_VALUE] as T;
-}
-
-
-export function imSet<T>(c: ImCache, val: T): T {
-    const entries = c[CACHE_CURRENT_ENTRIES];
-    const idx = entries[ENTRIES_IDX];
-    entries[idx + 1] = val;
-    return val;
-}
-
-type ListMapBlock = { rendered: boolean; entries: ImCacheEntries; };
-
-
-export function __imBlockKeyed(c: ImCache, key: ValidKey) {
-    const entries = c[CACHE_CURRENT_ENTRIES];
-    
-    let map = entries[ENTRIES_KEYED_MAP] as (Map<ValidKey, ListMapBlock> | undefined);
-    if (map === undefined) {
-        map = new Map<ValidKey, ListMapBlock>();
-        entries[ENTRIES_KEYED_MAP] = map;
-    }
-
-    let block = map.get(key);
-    if (block === undefined) {
-        block = { rendered: false, entries: [] };
-        map.set(key, block);
-    }
-
-    /**
-     * You're rendering this list element twice. You may have duplicate keys in your dataset.
-     * If that is not the case, a more common cause is that you are mutating collections while iterating them.
-     * All sorts of bugs and performance issues tend to arise when I 'gracefully' handle this case, so I've just thrown an exception instead.
-     *
-     * If you're doing this in an infrequent event, here's a quick fix:
-     * {
-     *      let deferredAction: () => {};
-     *      imCacheListItem(s);
-     *      for (item of list) {
-     *          if (event) deferredAction = () => literally same mutation
-     *      }
-     *      imCacheListItemEnd(s);
-     *      if (deferredAction !== undefined) deferredAction();
-     * }
-     */
-    if (block.rendered === true) throw new Error(
-        "You've requested the same list key twice. This is indicative of a bug. The comment above this exception will explain more."
-    );
-
-    block.rendered = true;
-
-    const parentType = entries[ENTRIES_PARENT_TYPE];
-    const parent     = entries[ENTRIES_PARENT_VALUE];
-    imCacheEntriesPush(c, block.entries, parentType, parent);
-}
-
-export function imCacheEntriesAddDestructor(entries: ImCacheEntries, destructor: () => void) {
-    let destructors = entries[ENTRIES_DESTRUCTORS];
-    if (destructor === undefined) {
-        destructors = entries[ENTRIES_DESTRUCTORS] = [];
-    }
-
-    destructors.push(destructor);
-}
-
-export function imCacheEntriesOnRemove(entries: ImCacheEntries) {
-    // don't re-traverse these items.
-    if (entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY] === true) {
-        entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY] = false;
-
-        for (let i = ENTRIES_ITEMS_START; i < entries.length; i += 2) {
-            const t = entries[i];
-            const v = entries[i + 1];
-            if (t === imBlock) {
-                imCacheEntriesOnRemove(v);
-            }
-        }
-    }
-}
-
-export function imCacheEntriesOnDestroy(entries: ImCacheEntries) {
-    // don't re-traverse these items.
-    if (entries[ENTRIES_REMOVE_LEVEL] < REMOVE_LEVEL_DESTROYED) {
-        entries[ENTRIES_REMOVE_LEVEL] = REMOVE_LEVEL_DESTROYED;
-
-        for (let i = ENTRIES_ITEMS_START; i < entries.length; i += 2) {
-            const t = entries[i];
-            const v = entries[i + 1];
-            if (t === imBlock) {
-                imCacheEntriesOnDestroy(v);
-            }
-        }
-
-        const destructors = entries[ENTRIES_DESTRUCTORS];
-        if (destructors !== undefined) {
-            for (const d of destructors) {
-                try {
-                    d();
-                } catch (e) {
-                    console.error("A destructor threw an error: ", e);
-                }
-            }
-            entries[ENTRIES_DESTRUCTORS] = undefined;
-        }
-    }
-}
-
-export function imBlock<T>(c: ImCache, parentTypeId: TypeId<T>, parent: T): ImCacheEntries {
-    let entries; entries = imGet(c, imBlock);
-    if (entries === undefined) entries = imSet(c, []);
-
-    imCacheEntriesPush(c, entries, parentTypeId, parent);
-
-    const map = entries[ENTRIES_KEYED_MAP] as (Map<ValidKey, ListMapBlock> | undefined);
-    if (map !== undefined) {
-        for (const v of map.values()) {
-            v.rendered = false;
-        }
-    }
-
-    return entries;
-}
-
-export function imBlockEnd(c: ImCache) {
-    const entries = c[CACHE_CURRENT_ENTRIES];
-    let map = entries[ENTRIES_KEYED_MAP] as (Map<ValidKey, ListMapBlock> | undefined);
-
-    if (map !== undefined) {
-         // TODO: Blocks need to either have a 'REMOVE_LEVEL_DETATCHED' or a 'REMOVE_LEVEL_DESTROYED' so that
-         // we know what to do with the things we didn't render. For now, defaulting to DETATCHED
-        for (const v of map.values()) {
-            if (!v.rendered) {
-                imCacheEntriesOnRemove(v.entries);
-            }
-        }
-    }
-
-    const idx = entries[ENTRIES_IDX];
-    const lastIdx = entries[ENTRIES_LAST_IDX];
-    if (idx !== (ENTRIES_ITEMS_START - 2)) {
-        if (lastIdx !== (ENTRIES_ITEMS_START - 2) && lastIdx !== lastIdx) {
-            throw new Error("You should be rendering the same number of things in every render cycle");
-        }
-    }
-
-    return imCacheEntriesPop(c);
-}
-
-export function __imBlockDerived(c: ImCache): ImCacheEntries {
-    const entries    = c[CACHE_CURRENT_ENTRIES];
-    const parentType = entries[ENTRIES_PARENT_TYPE];
-    const parent     = entries[ENTRIES_PARENT_VALUE];
-
-    return imBlock(c, parentType, parent);
-}
-
-function isFirstishRender(c: ImCache): boolean {
-    const entries = c[CACHE_CURRENT_ENTRIES];
-    return entries[ENTRIES_LAST_IDX] === (ENTRIES_ITEMS_START - 2);
-}
-
-export function __imBlockDerivedEnd(c: ImCache) {
-    // The DOM appender will automatically update and diff the children if they've changed.
-    // However we can't just do
-    // ```
-    // if (blah) {
-    //      new component here
-    // }
-    // ```
-    //
-    // Because this would de-sync the immediate mode call-sites from their positions in the cache entries.
-    // But simply putting them in another entry list:
-    //
-    // imConditionalBlock();
-    // if (blah) {
-    // }
-    // imConditionalBlockEnd();
-    //
-    // Will automatically isolate the next immediate mode call-sites with zero further effort required,
-    // because all the entries will go into a single array which always takes up just 1 slot in the entries list.
-    // It's a bit confusing why there isn't more logic here though, I guess.
-    //
-    // NOTE: I've now moved this functionality into core. Your immediate mode tree builder will need
-    // to resolve diffs in basically the same way.
-
-    imBlockEnd(c);
-}
-
-function imIf(c: ImCache): true {
-    __imBlockArray(c);
-        __imBlockConditional(c);
-    return true;
-}
-
-function imIfElse(c: ImCache): true {
-        __imBlockConditionalEnd(c);
-        __imBlockConditional(c);
-    return true;
-}
-
-function imIfEnd(c: ImCache) {
-        __imBlockConditionalEnd(c);
-    __imBlockArrayEnd(c);
-}
-
-function imSwitch(c: ImCache, key: ValidKey) {
-    __imBlockKeyed(c, key);
-}
-
-function imSwitchEnd(c: ImCache) {
-    // the parent block above this will handle the map, not this block
-
-    __imBlockDerivedEnd(c);
-}
-
-function __imBlockArray(c: ImCache) {
-    __imBlockDerived(c);
-}
-
-function __imBlockConditional(c: ImCache) {
-    __imBlockDerived(c);
-}
-
-function __imBlockConditionalEnd(c: ImCache) {
-    const entries = c[CACHE_CURRENT_ENTRIES];
-    if (entries[ENTRIES_IDX] === ENTRIES_ITEMS_START - 2) {
-        imCacheEntriesOnRemove(entries);
-    }
-
-    __imBlockDerivedEnd(c);
-}
-
-function imFor(c: ImCache) {
-    __imBlockArray(c);
-}
-
-function imForEnd(c: ImCache) {
-    __imBlockArrayEnd(c);
-}
-
-function __imBlockArrayEnd(c: ImCache) {
-    const entries = c[CACHE_CURRENT_ENTRIES]
-
-    const idx = entries[ENTRIES_IDX];
-    const lastIdx = entries[ENTRIES_LAST_IDX];
-    if (idx < lastIdx) {
-        // These entries have left the conditional rendering pathway
-        for (let i = idx + 2; i <= lastIdx; i += 2) {
-            const t = entries[i];
-            const v = entries[i + 1];
-            if (t === imBlock) {
-                imCacheEntriesOnRemove(v);
-            }
-        }
-    }
-
-    // we allow growing this list in particular
-    entries[ENTRIES_LAST_IDX] = idx; 
-
-    __imBlockDerivedEnd(c1);
-}
-
-
-const MEMO_INITIAL_VALUE = {};
-
-export const MEMO_NOT_CHANGED  = 0;
-/** returned by {@link imMemo} if the value changed */
-export const MEMO_CHANGED      = 1; 
-/** 
- * returned by {@link imMemo} if this is simply the first render. 
- * Most of the time the distinction is not important, but sometimes,
- * you want to happen on a change but NOT the initial renderer.
- */
-export const MEMO_FIRST_RENDER = 2;
-/** 
- * returned by {@link imMemo} if this is is caused by the component
- * re-entering the conditional rendering codepath.
- */
-export const MEMO_FIRST_RENDER_CONDITIONAL = 3;
-
-export type ImMemoResult
-    = typeof MEMO_NOT_CHANGED
-    | typeof MEMO_CHANGED 
-    // NOTE: we've lost the ability to detect MEMO_FIRST_RENDER correctly without a second state entry specifically for this, which I probably won't add.
-    // TODO: remove this once we confirm it's never used
-    | typeof MEMO_FIRST_RENDER 
-    | typeof MEMO_FIRST_RENDER_CONDITIONAL;
-
-// NOTE: if val starts off as undefined, this may never go off...
-function imMemo(c: ImCache, val: unknown): ImMemoResult {
-    // NOTE: I had previously implemented imMemo() and imEndMemo():
-    // ```
-    // if (imBeginMemo().val(x).objectVals(obj)) {
-    //      <Memoized component>
-    // } imEndMemo();
-    // ```
-    // It's pretty straightforward to implement - just memorize the dom index and the state index,
-    // ensure it returns true the first time so that you always have some components,
-    // and then onwards, if the values are the same, just advance the dom index and state index.
-    // else, return true and allow the rendering code to do this for you, and cache the new offsets
-    // in imEndMemo. Looks great right? Ended up with all sorts of stale state bugs so I deleted it.
-    // It's just not worth it ever, imo.
-    //
-    // I also previously had imMemoMany(), imMemoArray() and imMemoObjectVals, but these are a slipperly slope
-    // to imMemoDeep() which I definately don't want to ever implement. Also I was basically never using them. So I
-    // have deleted them.
-
-    let result: ImMemoResult = MEMO_NOT_CHANGED;
-
-    const entries = c[CACHE_CURRENT_ENTRIES];
-
-    let lastVal = imGet(c, inlineTypeId(imMemo));
-    if (lastVal !== val) {
-        imSet(c, val);
-        result = MEMO_CHANGED;
-    } else if (entries[ENTRIES_STARTED_CONDITIONALLY_RENDERING] === true) {
-        result = MEMO_FIRST_RENDER_CONDITIONAL;
-    }
-
-    return result;
-}
-
-
-type TryState = {
-    entries: ImCacheEntries,
-    err: any | null;
-    recover: () => void;
-    // TODO: consider Map<Error, count: number>
-}
-
-function imTry(c: ImCache): TryState {
-    const entries = __imBlockDerived(c);
-
-    let tryState = imGet(c, imTry);
-    if (tryState === undefined) {
-        const val: TryState = {
-            err: null,
-            recover: () => {
-                val.err = null;
-                c[CACHE_NEEDS_RERENDER] = true;
-            },
-            entries,
-        };
-        tryState = imSet(c, val);
-    }
-
-    return tryState;
-}
-
-function imTryCatch(c: ImCache, tryState: TryState, err: any) {
-    c[CACHE_NEEDS_RERENDER] = true;
-    tryState.err = err;
-    const idx = c.lastIndexOf(tryState.entries);
-    if (idx === -1) {
-        throw new Error("Couldn't find the entries in the stack to unwind to!");
-    }
-
-    c[CACHE_IDX] = idx;
-    c[CACHE_CURRENT_ENTRIES] = c[idx];
-}
-
-function imTryEnd(c: ImCache, tryState: TryState) {
-    const val = imGetAt(c, imTry, 0);
-    assert(val === tryState);
-    __imBlockDerivedEnd(c);
-}
-
-///////////////////////////////////////////////
-// UI Layer code starts here
-
-export type ValidElement = HTMLElement | SVGElement;
-
-type AppendableElement = (ValidElement | Text);
-export type DomAppender<E extends ValidElement = ValidElement> = {
-    root: E;
-    ref: unknown;
-    idx: number;
-    children: AppendableElement[];
-    lastIdx: number;
-    childrenChanged: boolean;
-    manualDom: boolean;
-};
-
-export function newDomAppender<E extends ValidElement>(root: E): DomAppender<E> {
-    return {
-        root,
-        ref: null,
-        idx: -1,
-        children: [],
-        lastIdx: -2,
-        childrenChanged: false,
-        manualDom: false,
-    };
-}
-
-export function finalizeDomAppender(appender: DomAppender<ValidElement>) {
-    if (
-        (appender.childrenChanged === true || appender.idx !== appender.lastIdx) &&
-        appender.manualDom === false
-    ) {
-        // TODO: set up a bigger example, so we can see if optimizing htis makes a difference.
-        // NOTE: the framework doesn't need to guess about what was added and removed in a diffing algorithm, it actually KNOWS!
-        // TODO: measure perf impacts.
-        // TODO: consider clear, then replace children.
-        appender.root.replaceChildren(...appender.children.slice(0, appender.idx + 1));
-        appender.childrenChanged = false;
-        appender.lastIdx = appender.idx;
-    }
-}
-
-export function appendToDomRoot(domAppender: DomAppender, child: AppendableElement) {
-    const i = ++domAppender.idx;
-    if (i < domAppender.children.length) {
-        if (domAppender.children[i] !== child) {
-            domAppender.childrenChanged = true;
-            domAppender.children[i] = child;
-        }
-    } else {
-        domAppender.children.push(child);
-        domAppender.childrenChanged = true;
-    }
-}
-
-
-// We can now memoize on an object reference instead of a string
-type KeyRef<K> = { val: K };
-export const EL_A = { val: "a" } as const;
-export const EL_ABBR = { val: "abbr" } as const;
-export const EL_ADDRESS = { val: "address" } as const;
-export const EL_AREA = { val: "area" } as const;
-export const EL_ARTICLE = { val: "article" } as const;
-export const EL_ASIDE = { val: "aside" } as const;
-export const EL_AUDIO = { val: "audio" } as const;
-export const EL_B = { val: "b" } as const;
-export const EL_BASE = { val: "base" } as const;
-export const EL_BDI = { val: "bdi" } as const;
-export const EL_BDO = { val: "bdo" } as const;
-export const EL_BLOCKQUOTE = { val: "blockquote" } as const;
-export const EL_BODY = { val: "body" } as const;
-export const EL_BR = { val: "br" } as const;
-export const EL_BUTTON = { val: "button" } as const;
-export const EL_CANVAS = { val: "canvas" } as const;
-export const EL_CAPTION = { val: "caption" } as const;
-export const EL_CITE = { val: "cite" } as const;
-export const EL_CODE = { val: "code" } as const;
-export const EL_COL = { val: "col" } as const;
-export const EL_COLGROUP = { val: "colgroup" } as const;
-export const EL_DATA = { val: "data" } as const;
-export const EL_DATALIST = { val: "datalist" } as const;
-export const EL_DD = { val: "dd" } as const;
-export const EL_DEL = { val: "del" } as const;
-export const EL_DETAILS = { val: "details" } as const;
-export const EL_DFN = { val: "dfn" } as const;
-export const EL_DIALOG = { val: "dialog" } as const;
-export const EL_DIV = { val: "div" } as const;
-export const EL_DL = { val: "dl" } as const;
-export const EL_DT = { val: "dt" } as const;
-export const EL_EM = { val: "em" } as const;
-export const EL_EMBED = { val: "embed" } as const;
-export const EL_FIELDSET = { val: "fieldset" } as const;
-export const EL_FIGCAPTION = { val: "figcaption" } as const;
-export const EL_FIGURE = { val: "figure" } as const;
-export const EL_FOOTER = { val: "footer" } as const;
-export const EL_FORM = { val: "form" } as const;
-export const EL_H1 = { val: "h1" } as const;
-export const EL_H2 = { val: "h2" } as const;
-export const EL_H3 = { val: "h3" } as const;
-export const EL_H4 = { val: "h4" } as const;
-export const EL_H5 = { val: "h5" } as const;
-export const EL_H6 = { val: "h6" } as const;
-export const EL_HEAD = { val: "head" } as const;
-export const EL_HEADER = { val: "header" } as const;
-export const EL_HGROUP = { val: "hgroup" } as const;
-export const EL_HR = { val: "hr" } as const;
-export const EL_HTML = { val: "html" } as const;
-export const EL_I = { val: "i" } as const;
-export const EL_IFRAME = { val: "iframe" } as const;
-export const EL_IMG = { val: "img" } as const;
-export const EL_INPUT = { val: "input" } as const;
-export const EL_INS = { val: "ins" } as const;
-export const EL_KBD = { val: "kbd" } as const;
-export const EL_LABEL = { val: "label" } as const;
-export const EL_LEGEND = { val: "legend" } as const;
-export const EL_LI = { val: "li" } as const;
-export const EL_LINK = { val: "link" } as const;
-export const EL_MAIN = { val: "main" } as const;
-export const EL_MAP = { val: "map" } as const;
-export const EL_MARK = { val: "mark" } as const;
-export const EL_MENU = { val: "menu" } as const;
-export const EL_META = { val: "meta" } as const;
-export const EL_METER = { val: "meter" } as const;
-export const EL_NAV = { val: "nav" } as const;
-export const EL_NOSCRIPT = { val: "noscript" } as const;
-export const EL_OBJECT = { val: "object" } as const;
-export const EL_OL = { val: "ol" } as const;
-export const EL_OPTGROUP = { val: "optgroup" } as const;
-export const EL_OPTION = { val: "option" } as const;
-export const EL_OUTPUT = { val: "output" } as const;
-export const EL_P = { val: "p" } as const;
-export const EL_PICTURE = { val: "picture" } as const;
-export const EL_PRE = { val: "pre" } as const;
-export const EL_PROGRESS = { val: "progress" } as const;
-export const EL_Q = { val: "q" } as const;
-export const EL_RP = { val: "rp" } as const;
-export const EL_RT = { val: "rt" } as const;
-export const EL_RUBY = { val: "ruby" } as const;
-export const EL_S = { val: "s" } as const;
-export const EL_SAMP = { val: "samp" } as const;
-export const EL_SCRIPT = { val: "script" } as const;
-export const EL_SEARCH = { val: "search" } as const;
-export const EL_SECTION = { val: "section" } as const;
-export const EL_SELECT = { val: "select" } as const;
-export const EL_SLOT = { val: "slot" } as const;
-export const EL_SMALL = { val: "small" } as const;
-export const EL_SOURCE = { val: "source" } as const;
-export const EL_SPAN = { val: "span" } as const;
-export const EL_STRONG = { val: "strong" } as const;
-export const EL_STYLE = { val: "style" } as const;
-export const EL_SUB = { val: "sub" } as const;
-export const EL_SUMMARY = { val: "summary" } as const;
-export const EL_SUP = { val: "sup" } as const;
-export const EL_TABLE = { val: "table" } as const;
-export const EL_TBODY = { val: "tbody" } as const;
-export const EL_TD = { val: "td" } as const;
-export const EL_TEMPLATE = { val: "template" } as const;
-export const EL_TEXTAREA = { val: "textarea" } as const;
-export const EL_TFOOT = { val: "tfoot" } as const;
-export const EL_TH = { val: "th" } as const;
-export const EL_THEAD = { val: "thead" } as const;
-export const EL_TIME = { val: "time" } as const;
-export const EL_TITLE = { val: "title" } as const;
-export const EL_TR = { val: "tr" } as const;
-export const EL_TRACK = { val: "track" } as const;
-export const EL_U = { val: "u" } as const;
-export const EL_UL = { val: "ul" } as const;
-export const EL_VAR = { val: "var" } as const;
-export const EL_VIDEO = { val: "video" } as const;
-export const EL_WBR = { val: "wbr" } as const;
-
-export function imEl<K extends keyof HTMLElementTagNameMap>(
-    c: ImCache,
-    r: KeyRef<K>
-): DomAppender<HTMLElementTagNameMap[K]> {
-    // Make this entry in the current entry list, so we can delete it easily
-    const appender = imGetParent(c, newDomAppender);
-
-    let childAppender: DomAppender<HTMLElementTagNameMap[K]> | undefined = imGet(c, newDomAppender);
-    if (childAppender === undefined) {
-        const element = document.createElement(r.val);
-        childAppender = imSet(c, newDomAppender(element));
-        childAppender.ref = r;
-    }
-
-    appendToDomRoot(appender, childAppender.root);
-
-    imBlock(c, newDomAppender, childAppender);
-
-    childAppender.idx = -1;
-
-    return childAppender;
-}
-
-export function imElEnd(c: ImCache, r: KeyRef<keyof HTMLElementTagNameMap>) {
-    const appender = imGetParent(c, newDomAppender);
-    assert(appender.ref === r) // make sure we're popping the right thing
-    finalizeDomAppender(appender);
-    imBlockEnd(c);
-}
-
-
-function imDomRoot(c: ImCache, root: ValidElement) {
-    let appender = imGet(c, newDomAppender);
-    if (appender === undefined) {
-        appender = imSet(c, newDomAppender(root));
-        appender.ref = root;
-    }
-
-    imBlock(c, newDomAppender, appender);
-
-    appender.idx = -1;
-
-    return appender;
-}
-
-function imDomRootEnd(c: ImCache, root: ValidElement) {
-    let appender = imGetParent(c, newDomAppender);
-    assert(appender.ref === root);
-    finalizeDomAppender(appender);
-
-    imBlockEnd(c);
-}
-
-
-interface Stringifyable {
-    toString(): string;
-}
-
-function imStr(c: ImCache, value: Stringifyable): Text {
-    let textNode; textNode = imGet(c, imStr);
-    if (textNode === undefined) textNode = imSet(c, document.createTextNode(""));
-
-    // The user can't select this text node if we're constantly setting it, so it's behind a cache
-    let lastValue = imGet(c, inlineTypeId(document.createTextNode));
-    if (lastValue !== value) {
-        imSet(c, value);
-        textNode.nodeValue = value.toString();
-    }
-
-    const domAppender = imGetParent(c, newDomAppender);
-    appendToDomRoot(domAppender, textNode);
-
-    return textNode;
-}
-
-export function elSetStyle<K extends (keyof ValidElement["style"])>(
-    c: ImCache,
-    key: K,
-    value: string
-) {
-    const domAppender = imGetParent(c, newDomAppender);
-    domAppender.root.style[key] = value;
-}
-
-export function elGetAppender(c: ImCache) {
-    const domAppender = imGetParent(c, newDomAppender);
-    return domAppender;
-}
-
-export function elGet(c: ImCache) {
-    return elGetAppender(c).root;
-}
-
-
-///////////////////////////////////////////////
-// Application code starts here
-
+// NOTE: this rewrite went better than expected. it will most likely replace what we have right now.
+
+import {
+    CACHE_CURRENT_ENTRIES,
+    CACHE_NEEDS_RERENDER,
+    ENTRIES_IS_IN_CONDITIONAL_PATHWAY,
+    ENTRIES_REMOVE_LEVEL,
+    imCache,
+    ImCache,
+    imCacheEnd,
+    ImCacheEntries,
+    imCacheNeedsRerender,
+    imFor,
+    imForEnd,
+    imGet,
+    imIf,
+    imIfElse,
+    imIfEnd,
+    imMemo,
+    imSet,
+    imSwitch,
+    imSwitchEnd,
+    imTry,
+    imTryCatch,
+    imTryEnd,
+    inlineTypeId,
+    isFirstishRender
+} from "./im-core";
+import {
+    EL_BUTTON,
+    EL_DIV,
+    EL_H1,
+    EL_INPUT,
+    EL_LABEL,
+    elGet,
+    elSetAttr,
+    elSetStyle,
+    imDomRoot,
+    imDomRootEnd,
+    imEl,
+    imElEnd,
+    imStr,
+    ValidElement
+} from "./im-dom";
 
 // TODO:
-// - Core:
-//      - imMemo
-//      - [ ] im switch
-//      - [ ] im try catch
-// - User:
-//      - recreate our random-stuff.ts
+//      - [ ] recreate our random-stuff.ts
 // - Performance testing
-//      - Variadic memo
-//      - Making c1 a global variable
+//      - [ ] Variadic memo
+//      - [ ] Making c1 a global variable
+//      - [ ] Namespaced imports
 
 const c1: ImCache = [];
 
@@ -843,8 +57,8 @@ let toggleB = false;
 
 const changeEvents: string[] = [];
 
-let currentExample = 0;
-let globalIsAnimating = false;
+let currentExample = 2;
+let numAnimations = 0;
 
 function imMain() {
     imCache(c1); {
@@ -857,15 +71,15 @@ function imMain() {
 
                 imButton(c1); {
                     imStr(c1, "Conditional rendering, memo, array block");
-                    if (elWasClicked(c1)) currentExample = 0;
+                    if (elHasMouseDown(c1)) currentExample = 0;
                 } imButtonEnd(c1);
                 imButton(c1); {
                     imStr(c1, "Error boundaries");
-                    if (elWasClicked(c1)) currentExample = 1;
+                    if (elHasMouseDown(c1)) currentExample = 1;
                 } imButtonEnd(c1);
                 imButton(c1); {
                     imStr(c1, "Realtime rendering");
-                    if (elWasClicked(c1)) currentExample = 2;
+                    if (elHasMouseDown(c1)) currentExample = 2;
                 } imButtonEnd(c1);
 
                 imEl(c1, EL_DIV); {
@@ -875,8 +89,8 @@ function imMain() {
                 } imElEnd(c1, EL_DIV);
 
                 imEl(c1, EL_DIV); {
-                    if (imIf(c1) && globalIsAnimating) {
-                        imStr(c1, "[ Animation in progress ]");
+                    if (imIf(c1) && numAnimations > 0) {
+                        imStr(c1, "[" + numAnimations + " animation in progress ]");
                     } imIfEnd(c1);
                 } imElEnd(c1, EL_DIV);
             } imElEnd(c1, EL_DIV);
@@ -884,18 +98,22 @@ function imMain() {
             imDivider(c1);
 
             // TODO: convert these into automated tests
-            imSwitch(c1, currentExample); switch(currentExample) {
-                case 0: imViewMemoExample(c1); break;
-                case 1: imViewErrorBoundaryExample(c1); break;
-                case 2: imViewRealtimeExample(c1); break;
+            imSwitch(c1, currentExample); switch (currentExample) {
+                case 0: imMemoExampleView(c1); break;
+                case 1: imErrorBoundaryExampleView(c1); break;
+                case 2: imRealtimeExampleView(c1); break;
             } imSwitchEnd(c1);
 
         } imDomRootEnd(c1, document.body);
     } imCacheEnd(c1);
+
+    if (imCacheNeedsRerender(c1)) {
+        imMain();
+    }
 }
 
 
-function imViewMemoExample(c: ImCache) {
+function imMemoExampleView(c: ImCache) {
     imEl(c, EL_H1); {
         imStr(c, "Im memo changes");
     } imElEnd(c, EL_H1);
@@ -956,7 +174,7 @@ function imViewMemoExample(c: ImCache) {
     } imElEnd(c, EL_DIV);
 }
 
-function imViewErrorBoundaryExample(c: ImCache) {
+function imErrorBoundaryExampleView(c: ImCache) {
     imEl(c, EL_H1); imStr(c, "Error boundary example"); imElEnd(c, EL_H1);
 
     imDivider(c);
@@ -965,41 +183,41 @@ function imViewErrorBoundaryExample(c: ImCache) {
         const tryState = imTry(c); try {
             const { err, recover } = tryState;
 
-            imIf(c); if (err) {
+            if (imIf(c) && err) {
                 imEl(c, EL_DIV); imStr(c, "Your component encountered an error:"); imElEnd(c, EL_DIV);
                 imEl(c, EL_DIV); imStr(c, err); imElEnd(c, EL_DIV);
-                imEl(c, EL_DIV); imStr(c, "(Why don't we do this for the root of the program xDD)"); imElEnd(c, EL_DIV);
+                // Why don't we do this for the root of the program xDD)"); imElEnd(c, EL_DIV);
 
                 imButton(c); {
-                    imStr(c, "<Undo>"); 
-                    if (elWasClicked(c)) {
+                    imStr(c, "<Undo>");
+                    if (elHasMouseDown(c)) {
                         recover();
-                    } 
+                    }
                 } imButtonEnd(c);
             } else {
                 imIfElse(c);
 
                 imButton(c); {
-                    imStr(c, "Red button (use your imagination for this one, apologies)"); 
-                    if (elWasClicked(c)) {
+                    imStr(c, "Red button (use your imagination for this one, apologies)");
+                    if (elHasMouseDown(c)) {
                         throw new Error("nooo your not supposed to actually press it! You have now initiated the eventual heat-death of the universe.");
                     }
                 } imButtonEnd(c);
             } imIfEnd(c);
-        } catch(err) {
+        } catch (err) {
             imTryCatch(c, tryState, err);
         } imTryEnd(c, tryState);
     } imElEnd(c, EL_DIV);
 }
 
-function imViewRealtimeExample(c: ImCache) {
+function imRealtimeExampleView(c: ImCache) {
     imEl(c, EL_H1); imStr(c, "Realtime animations example"); imElEnd(c, EL_H1);
 
     imDivider(c);
 
     let currentExampleState; currentExampleState = imGet(c, imDivider);
     if (!currentExampleState) {
-        currentExampleState = imSet(c, { example: 0 })
+        currentExampleState = imSet(c, { example: 1 })
     }
 
     imEl(c, EL_DIV); {
@@ -1010,11 +228,11 @@ function imViewRealtimeExample(c: ImCache) {
 
         imButton(c); {
             imStr(c, "Sine waves");
-            if (elWasClicked(c)) currentExampleState.example = 0;
+            if (elHasMouseDown(c)) currentExampleState.example = 0;
         } imButtonEnd(c);
         imButton(c); {
             imStr(c, "Lots of thigns");
-            if (elWasClicked(c)) currentExampleState.example = 1;
+            if (elHasMouseDown(c)) currentExampleState.example = 1;
         } imButtonEnd(c);
     } imElEnd(c, EL_DIV);
 
@@ -1024,7 +242,7 @@ function imViewRealtimeExample(c: ImCache) {
         root.manualDom = true;
 
         // You can avoid all this by simply rerendering your whole app.
-        let state; state = imGet(c, imViewRealtimeExample);
+        let state; state = imGet(c, imRealtimeExampleView);
         if (!state) {
             const SIZE = 1;
 
@@ -1062,10 +280,10 @@ function imViewRealtimeExample(c: ImCache) {
 
                     // TODO: FPS counter.
 
-                    imCache(c); 
+                    imCache(c);
                     imDomRoot(c, root.root); {
                         imEl(c, EL_DIV); {
-                            imSwitch(c, currentExampleState.example); switch(currentExampleState.example) {
+                            imSwitch(c, currentExampleState.example); switch (currentExampleState.example) {
                                 case 0: {
                                     imEl(c, EL_H1); imStr(c, "Snake sine thing idx"); imElEnd(c, EL_H1);
                                     imDivider(c);
@@ -1075,25 +293,27 @@ function imViewRealtimeExample(c: ImCache) {
                                     }
                                 } break;
                                 case 1: {
-                                    imEl(c, EL_H1); imStr(c, "infamous 100k tiles bro I have spent a large percentage of my life on thhis page. .. :("); imElEnd(c, EL_H1);
+                                    imEl(c, EL_H1); imStr(c, "Old framework example page bro I have spent a large percentage of my life on thhis page. .. :("); imElEnd(c, EL_H1);
                                     imDivider(c);
 
-                                    imEl(c, EL_DIV); {
-                                        imStr(c, "TODO!");
-                                    } imElEnd(c, EL_DIV);
+                                    imOldRandomStuffExampleApplication(c, t);
                                 } break;
                             } imSwitchEnd(c);
                         } imElEnd(c, EL_DIV);
                     } imDomRootEnd(c, root.root);
                     imCacheEnd(c);
 
-                    if (isAnimating) {
-                        requestAnimationFrame(val.animation);
+                    if (imCacheNeedsRerender(c)) {
+                        val.animation(t);
                     } else {
-                        val.isAnimating = false;
-                        globalIsAnimating = false;
-                        requestAnimationFrame(imMain);
-                        console.log("stopped animating");
+                        if (isAnimating) {
+                            requestAnimationFrame(val.animation);
+                        } else {
+                            val.isAnimating = false;
+                            numAnimations--;
+                            requestAnimationFrame(imMain);
+                            console.log("stopped animating");
+                        }
                     }
                 }
             };
@@ -1108,25 +328,497 @@ function imViewRealtimeExample(c: ImCache) {
         if (imMemo(c, isAnimating) && !state.isAnimating) {
             console.log("started animating");
             state.isAnimating = true;
-            globalIsAnimating = true;
+            numAnimations++;
             requestAnimationFrame(state.animation);
-            requestAnimationFrame(imMain);
+            c[CACHE_NEEDS_RERENDER] = true;
         }
     } imElEnd(c, EL_DIV);
 }
 
-function imButton(c: ImCache) {
-    return imEl(c, EL_BUTTON); 
+function newWallClockState() {
+    return { val: 0 };
 }
 
-const mouseDownElements: ValidElement[] = [];
-function elWasClicked(c: ImCache) {
-    const el = elGet(c);
-    return mouseDownElements.includes(el);
+function imWallClockView(c: ImCache, t: number) {
+    let s = imGet(c, newWallClockState);
+    if (s === undefined) s = imSet(c, newWallClockState());
+
+    const dt = 0.02;
+
+    s.val += (-0.5 + Math.random()) * dt;
+    if (s.val > 1) s.val = 1;
+    if (s.val < -1) s.val = -1;
+
+    // The retained-mode code is actually more compact here!
+    imEl(c, EL_DIV); {
+        imEl(c, EL_DIV); {
+            const entries = c[CACHE_CURRENT_ENTRIES];
+            imStr(c, "Removed: " + entries[ENTRIES_REMOVE_LEVEL]);
+            imStr(c, "In conditional path: " + entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY]);
+            imMemo(c, 1);
+        } imElEnd(c, EL_DIV);
+    } imElEnd(c, EL_DIV);
+    imEl(c, EL_DIV); {
+        imStr(c, "brownian motion: " + s + "");
+    } imElEnd(c, EL_DIV);
+    imEl(c, EL_DIV); {
+        imStr(c, "FPS: " + (1 / dt).toPrecision(2) + "");
+    } imElEnd(c, EL_DIV);
+
+    let n = s.val < 0 ? 1 : 2;
+    n = 2; // TODO: revert
+    imFor(c); for (let i = 0; i < n; i++) {
+        imEl(c, EL_DIV); {
+            imStr(c, new Date().toISOString());
+        } imElEnd(c, EL_DIV);
+    } imForEnd(c);
+}
+
+function imOldRandomStuffExampleApplication(c: ImCache, t: number) {
+    let s = imGet(c, newAppState);
+    if (!s) {
+        s = imSet(c, newAppState());
+        s.rerender = () => c[CACHE_NEEDS_RERENDER] = true;
+    }
+
+    const tryState = imTry(c); try {
+        const { err, recover } = tryState;
+        if (imIf(c) && !err) {
+            imEl(c, EL_DIV); {
+                if (imButtonWasClicked(c, "Click me!")) {
+                    alert("noo");
+                }
+                imEl(c, EL_DIV); {
+                    imStr(c, "Hello world! ");
+                } imElEnd(c, EL_DIV);
+                imEl(c, EL_DIV); {
+                    imStr(c, "Lets goo");
+                } imElEnd(c, EL_DIV);
+                imEl(c, EL_DIV); {
+                    imStr(c, "Count: " + s.count);
+                } imElEnd(c, EL_DIV);
+                imEl(c, EL_DIV); {
+                    imStr(c, "Period: " + s.period);
+                } imElEnd(c, EL_DIV);
+
+                // sheesh. cant win with these people...
+                if (imIf(c) && s.count > 1000) {
+                    imEl(c, EL_DIV); {
+                        imStr(c, "The count is too damn high!!");
+                    } imElEnd(c, EL_DIV);
+                } else if (imIfElse(c) && s.count < 1000) {
+                    imEl(c, EL_DIV); {
+                        imStr(c, "The count is too damn low !!");
+                    } imElEnd(c, EL_DIV);
+                } else {
+                    imIfElse(c);
+                    imEl(c, EL_DIV); {
+                        imStr(c, "The count is too perfect!!");
+                    } imElEnd(c, EL_DIV);
+                } imIfEnd(c);
+                imEl(c, EL_DIV); {
+                    if (isFirstishRender(c)) {
+                        elSetAttr(c, "style", "height: 5px; background-color: black");
+                    }
+                } imElEnd(c, EL_DIV);
+                imEl(c, EL_DIV); {
+                    if (isFirstishRender(c)) {
+                        elSetAttr(c, "style", "padding: 10px; border: 1px solid black; display: inline-block");
+                    }
+
+                    if (s.count < 500) {
+                        // throw new Error("The count was way too low my dude");
+                    }
+
+                    if (imIf(c) && s.count < 2000) {
+                        imWallClockView(c, t);
+                    } imIfEnd(c);
+                } imElEnd(c, EL_DIV);
+            } imElEnd(c, EL_DIV);
+
+
+            imEl(c, EL_DIV); {
+                if (isFirstishRender(c)) {
+                    elSetStyle(c, "display", "flex");
+                    elSetStyle(c, "height", "4em");
+                }
+
+                const n = 20;
+                let pingPong; pingPong = imGet(c, inlineTypeId(imEl));
+                if (!pingPong) pingPong = imSet(c, { pos: 0, dir: 1 });
+
+                if (pingPong.pos === 0) {
+                    pingPong.dir = 1;
+                } else if (pingPong.pos === n) {
+                    pingPong.dir = -1;
+                }
+                if (pingPong.pos < n || pingPong.pos > 0) {
+                    pingPong.pos += pingPong.dir;
+                }
+
+                imFor(c); for (let i = 0; i <= n; i++) {
+                    imEl(c, EL_DIV); {
+                        if (isFirstishRender(c)) {
+                            elSetStyle(c, "flex", "1");
+                            elSetStyle(c, "height", "100%");
+                        }
+
+                        const present = i === pingPong.pos;
+                        const changed = imMemo(c, present);
+                        if (changed) {
+                            elSetStyle(c, "backgroundColor", present ? "#000" : "#FFF");
+                        }
+                    } imElEnd(c, EL_DIV);
+                } imForEnd(c);
+            } imElEnd(c, EL_DIV);
+
+            let gridState = imGet(c, newGridState);
+            if (!gridState) gridState = imSet(c, newGridState());
+
+            if (imIf(c) && s.grid === GRID_FRAMEWORK) {
+                const dt = 0.03;
+                const { values, gridRows, gridCols } = gridState;
+
+                imEl(c, EL_DIV); imStr(c, "Grid size: " + gridState.gridRows * gridState.gridCols); imElEnd(c, EL_DIV);
+
+                // NOTE: static list for performance. the grid size never changes. xD
+                imFor(c); for (let row = 0; row < gridRows; row++) {
+                    imEl(c, EL_DIV); {
+                        if (isFirstishRender(c)) {
+                            elSetAttr(c, "style", "display: flex;");
+                        }
+
+                        imFor(c); for (let col = 0; col < gridCols; col++) {
+                            imEl(c, EL_DIV); {
+                                if (isFirstishRender(c)) {
+                                    elSetStyle(c, "position", " relative");
+                                    elSetStyle(c, "display", " inline-block");
+                                    elSetStyle(c, "width", " 100px");
+                                    elSetStyle(c, "height", " 100px");
+                                    elSetStyle(c, "aspectRatio", "1 / 1");
+                                    elSetStyle(c, "border", " 1px solid red");
+                                }
+
+                                const idx = col + gridCols * row;
+
+                                if (elHasMouseOver(c)) {
+                                    values[idx] = 1;
+                                }
+
+                                // NOTE: usually you would do this with a CSS transition if you cared about performance, but
+                                // I'm just trying out some random stuff.
+                                let val = values[idx];
+                                if (val > 0) {
+                                    val -= dt;
+                                    if (val < 0) {
+                                        val = 0;
+                                    }
+                                    values[idx] = val;
+                                }
+
+                                const valRounded = Math.round(val * 255) / 255;
+                                const styleChanged = imMemo(c, valRounded);
+                                if (styleChanged) {
+                                    const r = elGet(c);
+                                    r.style.backgroundColor = `rgba(0, 0, 0, ${val})`;
+                                }
+
+                                // imEl(c, EL_DIV); {
+                                //     if (imIsFirstishRender()) {
+                                //         setStyle("position", "absolute");
+                                //         setStyle("top", "25%");
+                                //         setStyle("left", "25%");
+                                //         setStyle("right", "25%");
+                                //         setStyle("bottom", "25%");
+                                //         setStyle("backgroundColor", "white");
+                                //     }
+                                // } imEnd();
+                            } imElEnd(c, EL_DIV);
+                        } imForEnd(c);
+                    } imElEnd(c, EL_DIV);
+                } imForEnd(c);
+            } else if (imIfElse(c) && s.grid === GRID_MOST_OPTIMAL) {
+                imEl(c, EL_DIV); imStr(c,
+                    "[Theoretical best performance upperbound with our current approach]  Grid size: " + gridState.gridRows * gridState.gridCols
+                ); imElEnd(c, EL_DIV);
+
+                const root = imEl(c, EL_DIV); {
+                    root.manualDom = true;
+
+                    const dt = 0.02;
+                    const { values, gridRows, gridCols } = gridState;
+
+                    const gridRowsChanged = imMemo(c, gridRows);
+                    const gridColsChanged = imMemo(c, gridCols);
+
+                    let state; state = imGet(c, inlineTypeId(newGridState));
+                    if (!state || gridRowsChanged || gridColsChanged) {
+                        // This bit is not quite optimal. Thats ok though - we put slop behind infrequent signals all the time.
+
+                        if (!state) state = imSet<{
+                            rows: {
+                                root: HTMLElement;
+                                children: {
+                                    root: HTMLElement;
+                                    idx: number;
+                                    lastSignal: number;
+                                }[];
+                            }[];
+                        }>(c, { rows: [] });
+
+                        while (state.rows.length > gridRows) state.rows.pop();
+                        while (state.rows.length < gridRows) {
+                            const row = document.createElement("div");
+                            row.style.display = "flex";
+                            root.root.appendChild(row);
+                            state.rows.push({ root: row, children: [] });
+                        }
+                        root.root.replaceChildren(...state.rows.map(r => r.root));
+
+                        for (let i = 0; i < state.rows.length; i++) {
+                            const row = state.rows[i];
+                            while (row.children.length > gridCols) row.children.pop();
+                            while (row.children.length < gridCols) {
+                                const child = document.createElement("div");
+                                const val = { root: child, idx: 0, lastSignal: 0, };
+                                row.children.push(val);
+                                // Leak it. who cares. Mark and sweep should collect this when it becomes unreachable.
+                                child.onmouseover = () => {
+                                    if (val.idx > values.length) throw new Error("bruh");
+                                    values[val.idx] = 1;
+                                }
+
+                                child.style.position = " relative";
+                                child.style.display = " inline-block";
+                                child.style.width = " 100px";
+                                child.style.height = " 100px";
+                                child.style.aspectRatio = "1 / 1";
+                                child.style.border = " 1px solid red";
+                            }
+                            row.root.replaceChildren(...row.children.map(c => c.root));
+                        }
+
+                        for (let rowIdx = 0; rowIdx < state.rows.length; rowIdx++) {
+                            const row = state.rows[rowIdx];
+                            for (let colIdx = 0; colIdx < row.children.length; colIdx++) {
+                                const cell = row.children[colIdx];
+                                cell.idx = colIdx + gridCols * rowIdx;
+                            }
+                        }
+                    }
+
+                    for (let i = 0; i < state.rows.length; i++) {
+                        const row = state.rows[i];
+                        for (let i = 0; i < row.children.length; i++) {
+                            const pixel = row.children[i];
+                            const idx = pixel.idx;
+
+                            // NOTE: usually you would do this with a CSS transition if you cared about performance, but
+                            // I'm just trying out some random stuff.
+                            let val = values[idx];
+                            if (val > 0) {
+                                val -= dt;
+                                if (val < 0) {
+                                    val = 0;
+                                }
+                                values[idx] = val;
+                            }
+
+                            const valRounded = Math.round(val * 255) / 255;
+                            if (valRounded !== pixel.lastSignal) {
+                                pixel.root.style.backgroundColor = `rgba(0, 0, 0, ${val})`;
+                            }
+                        }
+                    }
+                } imElEnd(c, EL_DIV);
+            } imIfEnd(c);
+
+            imEl(c, EL_DIV); {
+                if (isFirstishRender(c)) {
+                    elSetAttr(c, "style", `position: fixed; bottom: 10px; left: 10px`);
+                }
+
+                let period = imSlider(c, "period");
+                if (period !== null) s.setPeriod(period);
+
+                let increment = imSlider(c, "increment");
+                if (increment !== null) s.setIncrement(increment);
+
+                if (imButtonWasClicked(c, "Toggle grid")) s.toggleGrid();
+                if (imButtonWasClicked(c, "Increment count")) s.incrementCount();
+                if (imButtonWasClicked(c, "Decrement count")) s.decrementCount();
+            }
+            imElEnd(c, EL_DIV);
+        } else {
+            imIfElse(c);
+
+            imEl(c, EL_DIV); {
+                if (isFirstishRender(c)) {
+                    elSetAttr(c, "style", `display: absolute;top:0;bottom:0;left:0;right:0;`);
+                }
+
+                imEl(c, EL_DIV); {
+                    if (isFirstishRender(c)) {
+                        elSetAttr(c, "style", `display: flex; flex-direction: column; align-items: center; justify-content: center;`);
+                    }
+
+                    imEl(c, EL_DIV); {
+                        imStr(c, "An error occured: " + err);
+                    }
+                    imElEnd(c, EL_DIV);
+                    imEl(c, EL_DIV); {
+                        imStr(c, "Click below to retry.")
+                    }
+                    imElEnd(c, EL_DIV);
+
+                    if (imButtonWasClicked(c, "Retry")) {
+                        s.count = 1000;
+                        recover();
+                    };
+                } imElEnd(c, EL_DIV);
+            } imElEnd(c, EL_DIV);
+        } imIfEnd(c);
+    } catch (err) {
+        imTryCatch(c, tryState, err);
+
+        console.error(err);
+    } imTryEnd(c, tryState);
+}
+
+
+function imSlider(c: ImCache, labelText: string): number | null {
+    let result: number | null = null;
+
+    const root = imEl(c, EL_DIV); {
+        imEl(c, EL_LABEL); {
+            elSetAttr(c, "for", labelText);
+            imStr(c, labelText);
+        }; imElEnd(c, EL_LABEL);
+        const input = imEl(c, EL_INPUT); {
+            if (isFirstishRender(c)) {
+                elSetAttr(c, "width", "1000px");
+                elSetAttr(c, "type", "range");
+                elSetAttr(c, "min", "1");
+                elSetAttr(c, "max", "300");
+                elSetAttr(c, "step", "1");
+            }
+
+            if (imMemo(c, labelText)) elSetAttr(c, "name", labelText)
+            if (imMemo(c, input.root.value)) result = input.root.valueAsNumber;
+        } imElEnd(c, EL_INPUT);
+    } imElEnd(c, EL_DIV);
+
+    return result;
+}
+
+
+
+
+function resize(values: number[], gridRows: number, gridCols: number) {
+    values.length = gridRows * gridCols;
+    values.fill(1);
+}
+
+const GRID_DISABLED = 0;
+const GRID_FRAMEWORK = 1;
+const GRID_MOST_OPTIMAL = 2;
+const GRID_NUM_VARIANTS = 3;
+
+function newAppState() {
+    const s = {
+        rerender: () => { },
+
+        period: 2,
+        setPeriod(val: number) {
+            s.period = val;
+            s.rerender();
+        },
+        incrementValue: 1,
+        setIncrement(val: number) {
+            s.incrementValue = val;
+            s.rerender();
+        },
+        count: 1,
+        incrementCount() {
+            s.count += s.incrementValue;
+            s.rerender();
+        },
+        decrementCount() {
+            s.count -= s.incrementValue;
+            s.rerender();
+        },
+        grid: GRID_FRAMEWORK,
+        toggleGrid() {
+            s.grid = (s.grid + 1) % GRID_NUM_VARIANTS;
+            s.rerender();
+        }
+    }
+
+    return s;
+}
+
+function newGridState() {
+    let gridRows = 1000;
+    let gridCols = 100;
+    const values: number[] = [];
+
+    resize(values, gridRows, gridCols);
+
+    return { gridRows, gridCols, values };
+}
+
+function imButton(c: ImCache) {
+    return imEl(c, EL_BUTTON);
+}
+
+function imButtonWasClicked(c: ImCache, text: string): boolean {
+    let result = false;
+
+    imButton(c); {
+        imStr(c, text);
+        if (elHasMouseDown(c)) result = true;
+    } imButtonEnd(c);
+
+    return result;
 }
 
 function imButtonEnd(c: ImCache) {
     imElEnd(c, EL_BUTTON);
+}
+
+const mouseDownElements = new Set<ValidElement>();
+const mouseClickedElements = new Set<ValidElement>();
+const mouseOverElements = new Set<ValidElement>();
+let lastMouseOverRoot: ValidElement | null = null;
+
+function findParents(el: ValidElement, elements: Set<ValidElement>) {
+    elements.clear();
+    let current: ValidElement | null = el;
+    while (current !== null) {
+        elements.add(current);
+        current = current.parentElement;
+    }
+}
+
+function elHasMouseDown(c: ImCache) {
+    const el = elGet(c);
+    const result = mouseDownElements.has(el);
+    mouseDownElements.delete(el);
+    return result;
+}
+
+function elHasMouseOver(c: ImCache) {
+    const el = elGet(c);
+    const result = mouseOverElements.has(el);
+    mouseDownElements.delete(el);
+    return result;
+}
+
+function elWasClicked(c: ImCache) {
+    const el = elGet(c);
+    const result = mouseClickedElements.has(el);
+    mouseClickedElements.delete(el);
+    return result;
 }
 
 function imDivider(c: ImCache) {
@@ -1138,7 +830,7 @@ function imDivider(c: ImCache) {
     } imElEnd(c, EL_DIV);
 }
 
-do { imMain(); } while (c1[CACHE_NEEDS_RERENDER]);
+imMain();
 
 document.addEventListener("keydown", (e) => {
     if (e.key === "1") {
@@ -1148,21 +840,32 @@ document.addEventListener("keydown", (e) => {
         toggleB = !toggleB;
     }
 
-    do { imMain(); } while (c1[CACHE_NEEDS_RERENDER]);
+    imMain();
 });
 
 
 document.addEventListener("mousedown", (e: MouseEvent) => {
-    let current = e.target as  ValidElement | null;
-    while (current !== null) {
-        mouseDownElements.push(current);
-        current = current.parentElement;
-    }
-
-    do { imMain(); } while (c1[CACHE_NEEDS_RERENDER]);
-
-    mouseDownElements.length = 0;
+    findParents(e.target as ValidElement, mouseDownElements);
+    imMain();
+    mouseDownElements.clear();
 });
+
+document.addEventListener("click", (e: MouseEvent) => {
+    findParents(e.target as ValidElement, mouseClickedElements);
+    imMain();
+    mouseClickedElements.clear();
+});
+
+document.addEventListener("mouseover", (e: MouseEvent) => {
+    if (e.target !== lastMouseOverRoot) {
+        console.log("Moue over");
+        lastMouseOverRoot = e.target as ValidElement;
+        findParents(e.target as ValidElement, mouseOverElements);
+        imMain();
+        // TODO: turn it back on.
+    }
+});
+
 
 // TODO: userland code
 //
