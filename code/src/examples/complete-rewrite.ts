@@ -2,6 +2,7 @@
 
 import {
     CACHE_CURRENT_ENTRIES,
+    CACHE_ITEMS_ITERATED,
     CACHE_NEEDS_RERENDER,
     ENTRIES_IS_IN_CONDITIONAL_PATHWAY,
     ENTRIES_REMOVE_LEVEL,
@@ -27,6 +28,8 @@ import {
     isFirstishRender
 } from "./im-core";
 import {
+    attrsSet,
+    classesSet,
     EL_BUTTON,
     EL_DIV,
     EL_H1,
@@ -40,6 +43,7 @@ import {
     imEl,
     imElEnd,
     imStr,
+    stylesSet,
     ValidElement
 } from "./im-dom";
 
@@ -60,7 +64,11 @@ const changeEvents: string[] = [];
 let currentExample = 2;
 let numAnimations = 0;
 
+let rerenders = 0;
+
 function imMain() {
+    rerenders++;
+
     imCache(c1); {
         imDomRoot(c1, document.body); {
             imEl(c1, EL_DIV); {
@@ -86,6 +94,12 @@ function imMain() {
                     if (isFirstishRender(c1)) {
                         elSetStyle(c1, "flex", "1");
                     }
+                } imElEnd(c1, EL_DIV);
+
+                imEl(c1, EL_DIV); {
+                    if (imIf(c1) && numAnimations > 0) {
+                        imStr(c1, "[" + rerenders + " rerenders ]");
+                    } imIfEnd(c1);
                 } imElEnd(c1, EL_DIV);
 
                 imEl(c1, EL_DIV); {
@@ -247,10 +261,16 @@ function imRealtimeExampleView(c: ImCache) {
             const SIZE = 1;
 
             const val = {
+                renderTime: 0,
                 c: [] as ImCache,
                 entries: [] as ImCacheEntries,
                 isAnimating: false,
-                pingPong: (c: ImCache, t: number, phase: number) => {
+                rerenders: 0,
+                itemsIterated: 0,
+                t: 0,
+                pingPong: (c: ImCache, phase: number) => {
+                    const t = val.t;
+
                     imEl(c, EL_DIV); {
                         if (isFirstishRender(c)) {
                             elSetStyle(c, "height", SIZE + "px");
@@ -273,27 +293,48 @@ function imRealtimeExampleView(c: ImCache) {
 
                     } imElEnd(c, EL_DIV);
                 },
-                animation: (t: number) => {
+                animation: (dt: number) => {
+                    const t = val.t;
+                    val.t += dt;
+
                     const c = val.c;
+                    val.rerenders++;
+
+                    let t0 = performance.now();
 
                     const isAnimating = val.entries.length > 0 && val.entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY];
-
-                    // TODO: FPS counter.
 
                     imCache(c);
                     imDomRoot(c, root.root); {
                         imEl(c, EL_DIV); {
+                            if (isFirstishRender(c)) {
+                                elSetStyle(c, "display", "flex");
+                                elSetStyle(c, "gap", "10px");
+                            }
+
+                            imEl(c, EL_DIV); imStr(c, Math.round(val.renderTime) + "ms"); imElEnd(c, EL_DIV);
+                            imEl(c, EL_DIV); imStr(c, val.rerenders + " rerenders"); imElEnd(c, EL_DIV);
+                            imEl(c, EL_DIV); imStr(c, val.itemsIterated + " rerenders"); imElEnd(c, EL_DIV);
+                            imEl(c, EL_DIV); imStr(c, stylesSet + " styles set"); imElEnd(c, EL_DIV);
+                            imEl(c, EL_DIV); imStr(c, classesSet + " classes set"); imElEnd(c, EL_DIV);
+                            imEl(c, EL_DIV); imStr(c, attrsSet + " attrs set"); imElEnd(c, EL_DIV);
+                        } imElEnd(c, EL_DIV);
+
+                        imEl(c, EL_DIV); {
                             imSwitch(c, currentExampleState.example); switch (currentExampleState.example) {
                                 case 0: {
                                     imEl(c, EL_H1); imStr(c, "Snake sine thing idx"); imElEnd(c, EL_H1);
+
                                     imDivider(c);
+
                                     const NUM = 500 / SIZE;
                                     for (let i = 0; i < NUM; i++) {
-                                        val.pingPong(c, t, (t / 1000) * i / NUM);
+                                        val.pingPong(c, (t / 1000) * i / NUM);
                                     }
                                 } break;
                                 case 1: {
                                     imEl(c, EL_H1); imStr(c, "Old framework example page bro I have spent a large percentage of my life on thhis page. .. :("); imElEnd(c, EL_H1);
+
                                     imDivider(c);
 
                                     imOldRandomStuffExampleApplication(c, t);
@@ -302,6 +343,8 @@ function imRealtimeExampleView(c: ImCache) {
                         } imElEnd(c, EL_DIV);
                     } imDomRootEnd(c, root.root);
                     imCacheEnd(c);
+
+                    val.itemsIterated = c[CACHE_ITEMS_ITERATED];
 
                     if (imCacheNeedsRerender(c)) {
                         val.animation(t);
@@ -314,6 +357,11 @@ function imRealtimeExampleView(c: ImCache) {
                             requestAnimationFrame(imMain);
                             console.log("stopped animating");
                         }
+                    }
+
+                    {
+                        const t = performance.now();
+                        val.renderTime = t - t0;
                     }
                 }
             };
@@ -329,7 +377,7 @@ function imRealtimeExampleView(c: ImCache) {
             console.log("started animating");
             state.isAnimating = true;
             numAnimations++;
-            requestAnimationFrame(state.animation);
+            state.animation(0);
             c[CACHE_NEEDS_RERENDER] = true;
         }
     } imElEnd(c, EL_DIV);
@@ -466,7 +514,7 @@ function imOldRandomStuffExampleApplication(c: ImCache, t: number) {
                         const present = i === pingPong.pos;
                         const changed = imMemo(c, present);
                         if (changed) {
-                            elSetStyle(c, "backgroundColor", present ? "#000" : "#FFF");
+                            // elSetStyle(c, "backgroundColor", present ? "#000" : "#FFF");
                         }
                     } imElEnd(c, EL_DIV);
                 } imForEnd(c);
@@ -520,7 +568,8 @@ function imOldRandomStuffExampleApplication(c: ImCache, t: number) {
                                 const styleChanged = imMemo(c, valRounded);
                                 if (styleChanged) {
                                     const r = elGet(c);
-                                    r.style.backgroundColor = `rgba(0, 0, 0, ${val})`;
+                                    // r.style.backgroundColor = `rgba(0, 0, 0, ${val})`;
+                                    elSetStyle(c, "backgroundColor", `rgba(0, 0, 0, ${val})`);
                                 }
 
                                 // imEl(c, EL_DIV); {
@@ -691,7 +740,7 @@ function imSlider(c: ImCache, labelText: string): number | null {
 
     const root = imEl(c, EL_DIV); {
         imEl(c, EL_LABEL); {
-            elSetAttr(c, "for", labelText);
+            if (imMemo(c, labelText)) elSetAttr(c, "for", labelText);
             imStr(c, labelText);
         }; imElEnd(c, EL_LABEL);
         const input = imEl(c, EL_INPUT); {
@@ -716,7 +765,7 @@ function imSlider(c: ImCache, labelText: string): number | null {
 
 function resize(values: number[], gridRows: number, gridCols: number) {
     values.length = gridRows * gridCols;
-    values.fill(1);
+    values.fill(0);
 }
 
 const GRID_DISABLED = 0;
@@ -758,8 +807,11 @@ function newAppState() {
 }
 
 function newGridState() {
+    // TODO: revert
     let gridRows = 1000;
     let gridCols = 100;
+    // let gridRows = 10;
+    // let gridCols = 10;
     const values: number[] = [];
 
     resize(values, gridRows, gridCols);
@@ -830,8 +882,6 @@ function imDivider(c: ImCache) {
     } imElEnd(c, EL_DIV);
 }
 
-imMain();
-
 document.addEventListener("keydown", (e) => {
     if (e.key === "1") {
         toggleA = !toggleA;
@@ -853,7 +903,6 @@ document.addEventListener("mousedown", (e: MouseEvent) => {
 document.addEventListener("click", (e: MouseEvent) => {
     findParents(e.target as ValidElement, mouseClickedElements);
     imMain();
-    mouseClickedElements.clear();
 });
 
 document.addEventListener("mouseover", (e: MouseEvent) => {
@@ -885,3 +934,9 @@ if (r.parentRoot !== null) {
 //     }, 1000);
 // }
 //
+
+
+
+
+
+imMain();

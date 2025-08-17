@@ -244,6 +244,10 @@ export function imStr(c: ImCache, value: Stringifyable): Text {
     return textNode;
 }
 
+export let stylesSet = 0;
+export let classesSet = 0;
+export let attrsSet = 0;
+
 export function elSetStyle<K extends (keyof ValidElement["style"])>(
     c: ImCache,
     key: K,
@@ -251,6 +255,7 @@ export function elSetStyle<K extends (keyof ValidElement["style"])>(
 ) {
     const domAppender = imGetParent(c, newDomAppender);
     domAppender.root.style[key] = value;
+    stylesSet++;
 }
 
 
@@ -267,6 +272,8 @@ export function elSetClass(
         domAppender.root.classList.remove(className);
     }
 
+    classesSet++;
+
     return !!enabled;
 }
 
@@ -282,6 +289,8 @@ export function elSetAttr(
     } else {
         domAppender.root.removeAttribute(attr);
     }
+
+    attrsSet++;
 }
 
 

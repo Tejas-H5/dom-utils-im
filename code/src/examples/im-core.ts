@@ -16,9 +16,10 @@ export const ENTRIES_STARTED_CONDITIONALLY_RENDERING = 5;
 export const ENTRIES_DESTRUCTORS = 6;
 export const ENTRIES_KEYED_MAP = 7;
 export const ENTRIES_COMPLETED_ONE_RENDER = 8;
-export const ENTRIES_PARENT_TYPE = 9;
-export const ENTRIES_PARENT_VALUE = 10;
-export const ENTRIES_ITEMS_START = 11;
+export const ENTRIES_INTERNAL_TYPE = 9;
+export const ENTRIES_PARENT_TYPE = 10;
+export const ENTRIES_PARENT_VALUE = 11;
+export const ENTRIES_ITEMS_START = 12;
 
 // Allows us to cache state for our immediate mode callsites.
 // Initially started using array indices instead of object+fields to see what would happen.
@@ -29,7 +30,8 @@ export const CACHE_CURRENT_ENTRIES = 1;
 export const CACHE_CONTEXTS = 2;
 export const CACHE_ROOT_ENTRIES = 3;
 export const CACHE_NEEDS_RERENDER = 4;
-export const CACHE_ENTRIES_START = 5;
+export const CACHE_ITEMS_ITERATED = 5;
+export const CACHE_ENTRIES_START = 6;
 
 
 // NOTE: this only works if you can somehow re-render your program whenever any error occurs.
@@ -88,12 +90,14 @@ export function imCache(c: ImCache) {
         c[CACHE_ROOT_ENTRIES] = [];
         c[CACHE_CURRENT_ENTRIES] = c[CACHE_ROOT_ENTRIES];
         c[CACHE_NEEDS_RERENDER] = false;
+        c[CACHE_ITEMS_ITERATED] = 0;
     }
 
     c[CACHE_IDX] = CACHE_ENTRIES_START - 1;
     c[CACHE_NEEDS_RERENDER] = false;
+    c[CACHE_ITEMS_ITERATED] = 0;
 
-    imCacheEntriesPush(c, c[CACHE_ROOT_ENTRIES], imCache, c);
+    imCacheEntriesPush(c, c[CACHE_ROOT_ENTRIES], imCache, c, INTERNAL_TYPE_CACHE);
 
     return c;
 }
@@ -120,11 +124,19 @@ export function imCacheNeedsRerender(c: ImCache) {
     return needsRerender;
 }
 
+const INTERNAL_TYPE_NORMAL_BLOCK = 1;
+const INTERNAL_TYPE_CONDITIONAL_BLOCK = 2;
+const INTERNAL_TYPE_ARRAY_BLOCK = 3;
+const INTERNAL_TYPE_KEYED_BLOCK = 4;
+const INTERNAL_TYPE_TRY_BLOCK = 5;
+const INTERNAL_TYPE_CACHE = 6;
+
 export function imCacheEntriesPush<T>(
     c: ImCache,
     entries: ImCacheEntries,
     parentTypeId: TypeId<T>,
-    parent: T
+    parent: T,
+    internalType: number,
 ) {
     const idx = ++c[CACHE_IDX];
     if (idx === c.length) {
@@ -144,13 +156,13 @@ export function imCacheEntriesPush<T>(
         entries[ENTRIES_IS_DERIVED] = false;
         entries[ENTRIES_STARTED_CONDITIONALLY_RENDERING] = false;
         entries[ENTRIES_PARENT_TYPE] = parentTypeId;
+        entries[ENTRIES_INTERNAL_TYPE] = internalType;
         entries[ENTRIES_COMPLETED_ONE_RENDER] = false;
         entries[ENTRIES_PARENT_VALUE] = parent;
         entries[ENTRIES_DESTRUCTORS] = undefined;
         entries[ENTRIES_KEYED_MAP] = undefined;
     } else {
         assert(entries[ENTRIES_PARENT_TYPE] === parentTypeId);
-
     }
 
     entries[ENTRIES_IDX] = ENTRIES_ITEMS_START - 2;
@@ -163,6 +175,7 @@ export function imCacheEntriesPop(c: ImCache) {
 
 export function imGet<T>(c: ImCache, typeId: TypeId<T>): T | undefined {
     const entries = c[CACHE_CURRENT_ENTRIES];
+    c[CACHE_ITEMS_ITERATED]++;
 
     entries[ENTRIES_IDX] += 2;
     const idx = entries[ENTRIES_IDX];
@@ -180,13 +193,13 @@ export function imGet<T>(c: ImCache, typeId: TypeId<T>): T | undefined {
         }
     }
 
-    assert(idx <= entries.length + 1);
-
     if (idx === entries.length) {
         entries.push(typeId);
         entries.push(undefined);
-    } else {
+    } else if (idx < entries.length) {
         assert(entries[idx] === typeId);
+    } else {
+        throw new Error("Shouldn't reach here");
     }
 
     return entries[idx + 1];
@@ -261,7 +274,7 @@ export function __imBlockKeyed(c: ImCache, key: ValidKey) {
 
     const parentType = entries[ENTRIES_PARENT_TYPE];
     const parent = entries[ENTRIES_PARENT_VALUE];
-    imCacheEntriesPush(c, block.entries, parentType, parent);
+    imCacheEntriesPush(c, block.entries, parentType, parent, INTERNAL_TYPE_KEYED_BLOCK);
 }
 
 export function imCacheEntriesAddDestructor(entries: ImCacheEntries, destructor: () => void) {
@@ -315,11 +328,16 @@ export function imCacheEntriesOnDestroy(entries: ImCacheEntries) {
     }
 }
 
-export function imBlock<T>(c: ImCache, parentTypeId: TypeId<T>, parent: T): ImCacheEntries {
+export function imBlock<T>(
+    c: ImCache,
+    parentTypeId: TypeId<T>,
+    parent: T,
+    internalType: number = INTERNAL_TYPE_NORMAL_BLOCK
+): ImCacheEntries {
     let entries; entries = imGet(c, imBlock);
     if (entries === undefined) entries = imSet(c, []);
 
-    imCacheEntriesPush(c, entries, parentTypeId, parent);
+    imCacheEntriesPush(c, entries, parentTypeId, parent, internalType);
 
     const map = entries[ENTRIES_KEYED_MAP] as (Map<ValidKey, ListMapBlock> | undefined);
     if (map !== undefined) {
@@ -333,9 +351,13 @@ export function imBlock<T>(c: ImCache, parentTypeId: TypeId<T>, parent: T): ImCa
     return entries;
 }
 
-export function imBlockEnd(c: ImCache) {
+export function imBlockEnd(c: ImCache, internalType: number = INTERNAL_TYPE_NORMAL_BLOCK) {
     const entries = c[CACHE_CURRENT_ENTRIES];
     let map = entries[ENTRIES_KEYED_MAP] as (Map<ValidKey, ListMapBlock> | undefined);
+
+    // Opening and closing blocks may not be lining up right.
+    // You may have missed or inserted some blocks by accident.
+    assert(entries[ENTRIES_INTERNAL_TYPE] === internalType);
 
     if (map !== undefined) {
         // TODO: Blocks need to either have a 'REMOVE_LEVEL_DETATCHED' or a 'REMOVE_LEVEL_DESTROYED' so that
@@ -361,12 +383,12 @@ export function imBlockEnd(c: ImCache) {
     return imCacheEntriesPop(c);
 }
 
-export function __imBlockDerived(c: ImCache): ImCacheEntries {
+export function __imBlockDerived(c: ImCache, internalType: number): ImCacheEntries {
     const entries = c[CACHE_CURRENT_ENTRIES];
     const parentType = entries[ENTRIES_PARENT_TYPE];
     const parent = entries[ENTRIES_PARENT_VALUE];
 
-    return imBlock(c, parentType, parent);
+    return imBlock(c, parentType, parent, internalType);
 }
 
 export function isFirstishRender(c: ImCache): boolean {
@@ -374,7 +396,7 @@ export function isFirstishRender(c: ImCache): boolean {
     return entries[ENTRIES_COMPLETED_ONE_RENDER] === false;
 }
 
-export function __imBlockDerivedEnd(c: ImCache) {
+export function __imBlockDerivedEnd(c: ImCache, internalType: number) {
     // The DOM appender will automatically update and diff the children if they've changed.
     // However we can't just do
     // ```
@@ -398,7 +420,7 @@ export function __imBlockDerivedEnd(c: ImCache) {
     // NOTE: I've now moved this functionality into core. Your immediate mode tree builder will need
     // to resolve diffs in basically the same way.
 
-    imBlockEnd(c);
+    imBlockEnd(c, internalType);
 }
 
 /**
@@ -428,15 +450,15 @@ export function imSwitch(c: ImCache, key: ValidKey) {
 }
 
 export function imSwitchEnd(c: ImCache) {
-    __imBlockDerivedEnd(c);
+    __imBlockDerivedEnd(c, INTERNAL_TYPE_KEYED_BLOCK);
 }
 
 function __imBlockArray(c: ImCache) {
-    __imBlockDerived(c);
+    __imBlockDerived(c, INTERNAL_TYPE_ARRAY_BLOCK);
 }
 
 function __imBlockConditional(c: ImCache) {
-    __imBlockDerived(c);
+    __imBlockDerived(c, INTERNAL_TYPE_CONDITIONAL_BLOCK);
 }
 
 function __imBlockConditionalEnd(c: ImCache) {
@@ -445,7 +467,7 @@ function __imBlockConditionalEnd(c: ImCache) {
         imCacheEntriesOnRemove(entries);
     }
 
-    __imBlockDerivedEnd(c);
+    __imBlockDerivedEnd(c, INTERNAL_TYPE_CONDITIONAL_BLOCK);
 }
 
 export function imFor(c: ImCache) {
@@ -475,7 +497,7 @@ function __imBlockArrayEnd(c: ImCache) {
     // we allow growing or shrinking this kind of block in particular
     entries[ENTRIES_LAST_IDX] = idx;
 
-    __imBlockDerivedEnd(c);
+    __imBlockDerivedEnd(c, INTERNAL_TYPE_ARRAY_BLOCK);
 }
 
 
@@ -541,7 +563,7 @@ export type TryState = {
 };
 
 export function imTry(c: ImCache): TryState {
-    const entries = __imBlockDerived(c);
+    const entries = __imBlockDerived(c, INTERNAL_TYPE_TRY_BLOCK);
 
     let tryState = imGet(c, imTry);
     if (tryState === undefined) {
@@ -574,5 +596,5 @@ export function imTryCatch(c: ImCache, tryState: TryState, err: any) {
 export function imTryEnd(c: ImCache, tryState: TryState) {
     const entries = c[CACHE_CURRENT_ENTRIES];
     assert(entries === tryState.entries);
-    __imBlockDerivedEnd(c);
+    __imBlockDerivedEnd(c, INTERNAL_TYPE_TRY_BLOCK);
 }
