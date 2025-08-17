@@ -97,16 +97,14 @@ function imMain() {
                 } imElEnd(c1, EL_DIV);
 
                 imEl(c1, EL_DIV); {
-                    if (imIf(c1) && numAnimations > 0) {
-                        imStr(c1, "[" + rerenders + " rerenders ]");
-                    } imIfEnd(c1);
+                    imStr(c1, "[" + rerenders + " rerenders ]");
                 } imElEnd(c1, EL_DIV);
 
-                imEl(c1, EL_DIV); {
-                    if (imIf(c1) && numAnimations > 0) {
+                if (imIf(c1) && numAnimations > 0) {
+                    imEl(c1, EL_DIV); {
                         imStr(c1, "[" + numAnimations + " animation in progress ]");
-                    } imIfEnd(c1);
-                } imElEnd(c1, EL_DIV);
+                    } imElEnd(c1, EL_DIV);
+                } imIfEnd(c1);
             } imElEnd(c1, EL_DIV);
 
             imDivider(c1);
@@ -293,6 +291,7 @@ function imRealtimeExampleView(c: ImCache) {
 
                     } imElEnd(c, EL_DIV);
                 },
+                animationId: 0,
                 animation: (dt: number) => {
                     const t = val.t;
                     val.t += dt;
@@ -347,14 +346,17 @@ function imRealtimeExampleView(c: ImCache) {
                     val.itemsIterated = c[CACHE_ITEMS_ITERATED];
 
                     if (imCacheNeedsRerender(c)) {
-                        val.animation(t);
+                        val.animation(0);
                     } else {
                         if (isAnimating) {
-                            requestAnimationFrame(val.animation);
+                            // Finally. A usecase for cancelAnimationFrame
+                            // (A method called from many places that needs to start/resume the same animation)
+                            cancelAnimationFrame(val.animationId);
+                            val.animationId = requestAnimationFrame(val.animation);
                         } else {
                             val.isAnimating = false;
                             numAnimations--;
-                            requestAnimationFrame(imMain);
+                            imMain();
                             console.log("stopped animating");
                         }
                     }
@@ -380,6 +382,8 @@ function imRealtimeExampleView(c: ImCache) {
             state.animation(0);
             c[CACHE_NEEDS_RERENDER] = true;
         }
+
+        state.animation(0);
     } imElEnd(c, EL_DIV);
 }
 
@@ -897,7 +901,6 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("mousedown", (e: MouseEvent) => {
     findParents(e.target as ValidElement, mouseDownElements);
     imMain();
-    mouseDownElements.clear();
 });
 
 document.addEventListener("click", (e: MouseEvent) => {
