@@ -25,7 +25,7 @@ import {
     imTryEnd,
     inlineTypeId,
     isFirstishRender
-} from "./im-core";
+} from "../utils/im-core";
 import {
     attrsSet,
     classesSet,
@@ -46,7 +46,7 @@ import {
     imStr,
     stylesSet,
     ValidElement
-} from "./im-dom";
+} from "../utils/im-dom";
 
 // TODO:
 //      - [ ] recreate our random-stuff.ts
