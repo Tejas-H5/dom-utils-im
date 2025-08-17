@@ -10,7 +10,6 @@ import {
     ImCache,
     imCacheEnd,
     ImCacheEntries,
-    imCacheNeedsRerender,
     imFor,
     imForEnd,
     imGet,
@@ -35,6 +34,8 @@ import {
     EL_H1,
     EL_INPUT,
     EL_LABEL,
+    EL_S,
+    EL_SPAN,
     elGet,
     elSetAttr,
     elSetStyle,
@@ -61,7 +62,7 @@ let toggleB = false;
 
 const changeEvents: string[] = [];
 
-let currentExample = 2;
+let currentExample = 3;
 let numAnimations = 0;
 
 let rerenders = 0;
@@ -89,6 +90,10 @@ function imMain() {
                     imStr(c1, "Realtime rendering");
                     if (elHasMouseDown(c1)) currentExample = 2;
                 } imButtonEnd(c1);
+                imButton(c1); {
+                    imStr(c1, "Tree view example");
+                    if (elHasMouseDown(c1)) currentExample = 3;
+                } imButtonEnd(c1);
 
                 imEl(c1, EL_DIV); {
                     if (isFirstishRender(c1)) {
@@ -100,28 +105,23 @@ function imMain() {
                     imStr(c1, "[" + rerenders + " rerenders ]");
                 } imElEnd(c1, EL_DIV);
 
-                if (imIf(c1) && numAnimations > 0) {
-                    imEl(c1, EL_DIV); {
-                        imStr(c1, "[" + numAnimations + " animation in progress ]");
-                    } imElEnd(c1, EL_DIV);
-                } imIfEnd(c1);
+                imEl(c1, EL_DIV); {
+                    imStr(c1, "[" + numAnimations + " animation in progress ]");
+                } imElEnd(c1, EL_DIV);
             } imElEnd(c1, EL_DIV);
 
             imDivider(c1);
 
             // TODO: convert these into automated tests
             imSwitch(c1, currentExample); switch (currentExample) {
-                case 0: imMemoExampleView(c1); break;
+                case 0: imMemoExampleView(c1);          break;
                 case 1: imErrorBoundaryExampleView(c1); break;
-                case 2: imRealtimeExampleView(c1); break;
+                case 2: imRealtimeExampleView(c1);      break;
+                case 3: imTreeExampleView(c1);          break;
             } imSwitchEnd(c1);
 
         } imDomRootEnd(c1, document.body);
-    } imCacheEnd(c1);
-
-    if (imCacheNeedsRerender(c1)) {
-        imMain();
-    }
+    } imCacheEnd(c1, imMain);
 }
 
 
@@ -303,62 +303,63 @@ function imRealtimeExampleView(c: ImCache) {
 
                     const isAnimating = val.entries.length > 0 && val.entries[ENTRIES_IS_IN_CONDITIONAL_PATHWAY];
 
-                    imCache(c);
-                    imDomRoot(c, root.root); {
-                        imEl(c, EL_DIV); {
-                            if (isFirstishRender(c)) {
-                                elSetStyle(c, "display", "flex");
-                                elSetStyle(c, "gap", "10px");
-                            }
+                    imCache(c); {
+                        imDomRoot(c, root.root); {
+                            imEl(c, EL_DIV); {
+                                if (isFirstishRender(c)) {
+                                    elSetStyle(c, "display", "flex");
+                                    elSetStyle(c, "gap", "10px");
+                                }
 
-                            imEl(c, EL_DIV); imStr(c, Math.round(val.renderTime) + "ms"); imElEnd(c, EL_DIV);
-                            imEl(c, EL_DIV); imStr(c, val.rerenders + " rerenders"); imElEnd(c, EL_DIV);
-                            imEl(c, EL_DIV); imStr(c, val.itemsIterated + " rerenders"); imElEnd(c, EL_DIV);
-                            imEl(c, EL_DIV); imStr(c, stylesSet + " styles set"); imElEnd(c, EL_DIV);
-                            imEl(c, EL_DIV); imStr(c, classesSet + " classes set"); imElEnd(c, EL_DIV);
-                            imEl(c, EL_DIV); imStr(c, attrsSet + " attrs set"); imElEnd(c, EL_DIV);
-                        } imElEnd(c, EL_DIV);
+                                imEl(c, EL_DIV); imStr(c, Math.round(val.renderTime) + "ms"); imElEnd(c, EL_DIV);
+                                imEl(c, EL_DIV); imStr(c, val.rerenders + " rerenders"); imElEnd(c, EL_DIV);
+                                imEl(c, EL_DIV); imStr(c, val.itemsIterated + " rerenders"); imElEnd(c, EL_DIV);
+                                imEl(c, EL_DIV); imStr(c, stylesSet + " styles set"); imElEnd(c, EL_DIV);
+                                imEl(c, EL_DIV); imStr(c, classesSet + " classes set"); imElEnd(c, EL_DIV);
+                                imEl(c, EL_DIV); imStr(c, attrsSet + " attrs set"); imElEnd(c, EL_DIV);
+                            } imElEnd(c, EL_DIV);
 
-                        imEl(c, EL_DIV); {
-                            imSwitch(c, currentExampleState.example); switch (currentExampleState.example) {
-                                case 0: {
-                                    imEl(c, EL_H1); imStr(c, "Snake sine thing idx"); imElEnd(c, EL_H1);
+                            imEl(c, EL_DIV); {
+                                imSwitch(c, currentExampleState.example); switch (currentExampleState.example) {
+                                    case 0: {
+                                        imEl(c, EL_H1); imStr(c, "Snake sine thing idx"); imElEnd(c, EL_H1);
 
-                                    imDivider(c);
+                                        imDivider(c);
 
-                                    const NUM = 500 / SIZE;
-                                    for (let i = 0; i < NUM; i++) {
-                                        val.pingPong(c, (t / 1000) * i / NUM);
-                                    }
-                                } break;
-                                case 1: {
-                                    imEl(c, EL_H1); imStr(c, "Old framework example page bro I have spent a large percentage of my life on thhis page. .. :("); imElEnd(c, EL_H1);
+                                        const NUM = 500 / SIZE;
+                                        for (let i = 0; i < NUM; i++) {
+                                            val.pingPong(c, (t / 1000) * i / NUM);
+                                        }
+                                    } break;
+                                    case 1: {
+                                        imEl(c, EL_H1); imStr(c, "Old framework example page bro I have spent a large percentage of my life on thhis page. .. :("); imElEnd(c, EL_H1);
 
-                                    imDivider(c);
+                                        imDivider(c);
 
-                                    imOldRandomStuffExampleApplication(c, t);
-                                } break;
-                            } imSwitchEnd(c);
-                        } imElEnd(c, EL_DIV);
-                    } imDomRootEnd(c, root.root);
-                    imCacheEnd(c);
+                                        imOldRandomStuffExampleApplication(c, t);
+                                    } break;
+                                } imSwitchEnd(c);
+                            } imElEnd(c, EL_DIV);
+                        } imDomRootEnd(c, root.root);
+                    } 
+                    let rerenderFn; rerenderFn = imGet(c, inlineTypeId(val.animation));
+                    if (!rerenderFn) {
+                        rerenderFn = imSet(c, () => val.animation(0));
+                    }
+                    imCacheEnd(c, rerenderFn);
 
                     val.itemsIterated = c[CACHE_ITEMS_ITERATED];
 
-                    if (imCacheNeedsRerender(c)) {
-                        val.animation(0);
+                    if (isAnimating) {
+                        // This animation can be started/resumed from a LOT of places, so we actually
+                        // need to cancel the last animation. I wasn't able to synchronise this in any other way, sadly
+                        cancelAnimationFrame(val.animationId);
+                        val.animationId = requestAnimationFrame(val.animation);
                     } else {
-                        if (isAnimating) {
-                            // Finally. A usecase for cancelAnimationFrame
-                            // (A method called from many places that needs to start/resume the same animation)
-                            cancelAnimationFrame(val.animationId);
-                            val.animationId = requestAnimationFrame(val.animation);
-                        } else {
-                            val.isAnimating = false;
-                            numAnimations--;
-                            imMain();
-                            console.log("stopped animating");
-                        }
+                        val.isAnimating = false;
+                        numAnimations--;
+                        imMain();
+                        console.log("stopped animating");
                     }
 
                     {
@@ -739,6 +740,175 @@ function imOldRandomStuffExampleApplication(c: ImCache, t: number) {
 }
 
 
+type TreeNode = {
+    value: string;
+    children: TreeNode[];
+    selectedIdx: number;
+    parent: TreeNode | null;
+};
+
+function newTreeNode(
+    value: string,
+    children: TreeNode[],
+    parent: TreeNode | null = null
+): TreeNode {
+    const node: TreeNode = { value, children, selectedIdx: 0, parent };
+    for (const child of children) {
+        child.parent = node;
+    }
+
+    return node;
+}
+
+function imTreeNodeView(c: ImCache, n: TreeNode, selected: TreeNode | null, depth: number) {
+    const isSelected = n === selected;
+
+    imEl(c, EL_DIV); {
+        if (isFirstishRender(c)) {
+            elSetStyle(c, "display", "flex");
+        }
+
+        imEl(c, EL_DIV); {
+            if (imMemo(c, depth)) {
+                elSetStyle(c, "width", (50 * depth) + "px");
+            }
+        } imElEnd(c, EL_DIV);
+
+
+        imEl(c, EL_DIV); {
+            if (imMemo(c, isSelected)) {
+                elSetStyle(c, "width", "3ch");
+                elSetStyle(c, "textAlign", "center");
+                elSetStyle(c, "opacity", isSelected ? "1" : "0");
+            }
+
+            imStr(c, ">");
+
+        } imElEnd(c, EL_DIV);
+
+        imEl(c, EL_DIV); {
+            imStr(c, n.value);
+
+            imEl(c, EL_SPAN); {
+                if (imMemo(c, isSelected)) {
+                    elSetStyle(c, "display", "inline-block");
+                    elSetStyle(c, "width", "3px");
+                    elSetStyle(c, "height", "1em");
+                    elSetStyle(c, "transform", "translate(0, 0.15em)");
+                    elSetStyle(c, "backgroundColor", isSelected ? "black" : "");
+                }
+            } imElEnd(c, EL_SPAN);
+        } imElEnd(c, EL_DIV);
+    } imElEnd(c, EL_DIV);
+
+    imFor(c); for (const child of n.children) {
+        imTreeNodeView(c, child, selected, depth + 1);
+    } imForEnd(c);
+}
+
+function imTreeExampleView(c: ImCache) {
+    imEl(c, EL_H1); imStr(c, "Tree viewer example"); imElEnd(c, EL_H1);
+
+    imDivider(c);
+
+    let state; state = imGet(c, inlineTypeId(imTreeExampleView));
+    if (!state) {
+        state = imSet<{
+            tree: TreeNode; 
+            selected: TreeNode | null;
+        }>(c, {
+            tree: newTreeNode("TODO", [
+                newTreeNode("Immediate mode framework rewrite 4", [
+                    newTreeNode("Port to ODIN, use __LINE_ and __FILE__ instead of type ids", []),
+                    newTreeNode("Figure out how to make web-assembly also work with the single-html-page paradigm", []),
+                ]),
+                newTreeNode("Make some actual websites", [
+                    newTreeNode("Finish programming language + debugger + text editor + visualizers", []),
+                    newTreeNode("Finish note tree", [
+                        newTreeNode("Rewrite to new framework", [
+                            newTreeNode("Wow bro. you're so productive", [])
+                        ]),
+                    ]),
+                    newTreeNode("Finish rhythm game", [
+                        newTreeNode("Rewrite to new framework", []),
+                        newTreeNode("Learn how to actually play the game", []),
+                    ]),
+                ])
+            ]),
+            selected: null,
+        });
+
+        if (state.selected === null) {
+            state.selected = state.tree;
+        }
+    }
+
+    if (state.selected) {
+        const parent = state.selected.parent;
+        if (parent !== null) {
+            parent.selectedIdx = parent.children.indexOf(state.selected);
+        }
+
+        if (
+            parent !== null &&
+            parent.selectedIdx > 0 &&
+            keyPressed === UP_KEY
+        ) {
+            parent.selectedIdx--;
+            state.selected= parent.children[parent.selectedIdx];
+        } else if (
+            parent !== null &&
+            parent.selectedIdx < parent.children.length - 1 &&
+            keyPressed === DOWN_KEY
+        ) {
+            parent.selectedIdx++;
+            state.selected= parent.children[parent.selectedIdx];
+        } else if (
+            parent !== null &&
+            keyPressed === LEFT_KEY
+        ) {
+            state.selected = parent;
+        } else if (
+            state.selected.children.length > 0 &&
+            keyPressed === RIGHT_KEY
+        ) {
+            const idx = state.selected.selectedIdx;
+            if (idx >= 0 && idx < state.selected.children.length) {
+                state.selected = state.selected.children[idx];
+            } else {
+                state.selected.selectedIdx = 0;
+                state.selected = state.selected.children[0];
+            }
+        } else if (keyPressed === LETTER_TYPED_KEY) {
+            if (letterTyped === "\b") {
+                state.selected.value = state.selected.value.substring(0, state.selected.value.length - 1);
+            } else {
+                state.selected.value += letterTyped;
+            }
+        } else if (parent !== null && keyPressed === CREATE_ENTRY_KEY_COMBO) {
+            let idx = parent.selectedIdx;
+            if (idx < 0 || idx >= parent.children.length) {
+                idx = 0;
+            } 
+
+            const newEntry = newTreeNode("New entry", [], parent);
+            parent.children.splice(idx + 1, 0, newEntry);
+            state.selected = newEntry;
+        }
+    }
+
+    imEl(c, EL_DIV); {
+        if (isFirstishRender(c)) {
+            elSetStyle(c, "fontFamily", "monospace");
+            elSetStyle(c, "fontSize", "30px");
+            elSetStyle(c, "whiteSpace", "pre-wrap");
+        }
+
+        imTreeNodeView(c, state.tree, state.selected, 0);
+    } imElEnd(c, EL_DIV);
+}
+
+
 function imSlider(c: ImCache, labelText: string): number | null {
     let result: number | null = null;
 
@@ -886,6 +1056,17 @@ function imDivider(c: ImCache) {
     } imElEnd(c, EL_DIV);
 }
 
+let keyPressed = 0;
+let letterTyped = "";
+
+const UP_KEY = 1;
+const DOWN_KEY = 2;
+const LEFT_KEY = 3;
+const RIGHT_KEY = 4;
+const CREATE_ENTRY_KEY_COMBO = 5;
+const LETTER_TYPED_KEY = 6;
+const LETTER_BACKSPACED = 7;
+
 document.addEventListener("keydown", (e) => {
     if (e.key === "1") {
         toggleA = !toggleA;
@@ -894,7 +1075,28 @@ document.addEventListener("keydown", (e) => {
         toggleB = !toggleB;
     }
 
+    if (e.key === "ArrowUp") {
+        keyPressed = UP_KEY;
+    } else if (e.key === "ArrowLeft") {
+        keyPressed = LEFT_KEY;
+    } else if (e.key === "ArrowRight") {
+        keyPressed = RIGHT_KEY;
+    } else if (e.key === "ArrowDown") {
+        keyPressed = DOWN_KEY;
+    } else if (e.key === "Enter" && e.shiftKey) {
+        keyPressed = CREATE_ENTRY_KEY_COMBO;
+    } else if (e.key.length === 1) {
+        keyPressed = LETTER_TYPED_KEY;
+        letterTyped = e.key;
+    } else if (e.key === "Backspace") {
+        keyPressed = LETTER_TYPED_KEY;
+        letterTyped = "\b";
+    }
+
     imMain();
+
+    keyPressed = 0;
+    letterTyped = "";
 });
 
 

@@ -30,8 +30,9 @@ export const CACHE_CURRENT_ENTRIES = 1;
 export const CACHE_CONTEXTS = 2;
 export const CACHE_ROOT_ENTRIES = 3;
 export const CACHE_NEEDS_RERENDER = 4;
-export const CACHE_ITEMS_ITERATED = 5;
-export const CACHE_ENTRIES_START = 6;
+export const CACHE_RERENDER_FN = 5;
+export const CACHE_ITEMS_ITERATED = 6;
+export const CACHE_ENTRIES_START = 7;
 
 
 // NOTE: this only works if you can somehow re-render your program whenever any error occurs.
@@ -102,7 +103,7 @@ export function imCache(c: ImCache) {
     return c;
 }
 
-export function imCacheEnd(c: ImCache) {
+export function imCacheEnd(c: ImCache, rerenderFn: () => void) {
     imCacheEntriesPop(c);
 
     const startIdx = CACHE_ENTRIES_START - 1;
@@ -113,15 +114,17 @@ export function imCacheEnd(c: ImCache) {
         throw new Error("You've popped too many thigns off the stack!!!!");
     }
 
-}
-
-export function imCacheNeedsRerender(c: ImCache) {
     const needsRerender = c[CACHE_NEEDS_RERENDER];
     if (needsRerender === true) {
+        // Some things may occur while we're rendering the framework that require is to immediately rerender
+        // our components to not have a stale UI. Those events will set this flag to true, so that
+        // We can eventually reach here, and do a full rerender.
         c[CACHE_NEEDS_RERENDER] = false;
+        // Other things need to rerender the cache long after we've done a render. Mainly, DOM UI events - 
+        // once we get the event, we trigger a full rerender, and pull the event out of state and use it's result in the process.
+        c[CACHE_RERENDER_FN] = rerenderFn;
+        rerenderFn();
     }
-
-    return needsRerender;
 }
 
 const INTERNAL_TYPE_NORMAL_BLOCK = 1;
