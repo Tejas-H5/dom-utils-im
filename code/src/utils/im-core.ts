@@ -1,4 +1,4 @@
-// IM-CORE 1.03
+// IM-CORE 1.04
 
 import { assert } from "src/utils/assert";
 
@@ -816,6 +816,9 @@ export function getDeltaTimeSeconds(c: ImCache): number {
  *
  * 99% of the time, this pattern is a mistake that obfuscates and overcomplicates the code, 
  * and you should just pass `thing` as an additional function parameter.
+ * And for things you pass around *a lot* like c: ImCache, you will incur a significant performance
+ * hit by using this approach (as of 08/2025) (on top of the perf hit of using this framework).
+ *
  * Here is a decision tree you can use to decide whether to use this pattern or not:
  *
  *                                      | I need this state everywhere,    | I infrequently need this value, but the requirement can arise 
@@ -824,10 +827,10 @@ export function getDeltaTimeSeconds(c: ImCache): number {
  *                                      |                                  | everywhere when it does.
  * ----------------------------------------------------------------------------------------------------------------------------
  *  This state is related to my app's   | Don't use a global state stack   | Don't use a global state stack 
- *  domain model                        |                                  |
+ *  domain model                        | ctx: AppGlobalCtxState is here   | s: BlahViewState is here
  * ----------------------------------------------------------------------------------------------------------------------------
- *  This state is related to auxilary   | Don't use a global state stack   | Consider using a global state stack
- *  functions like input events         |                                  |
+ *  This state is not related to my     | Don't use a global state stack   | Consider using a global state stack
+ *  app's domain model                  | c: IMCache is here               | ev: ImGlobalEventSystem is here 
  * ----------------------------------------------------------------------------------------------------------------------------
  *
  */
