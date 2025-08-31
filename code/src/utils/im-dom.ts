@@ -1,57 +1,139 @@
+// IM-DOM 1.1
+
 import { assert } from "src/utils/assert";
-import { CACHE_NEEDS_RERENDER, CACHE_RERENDER_FN, imBlock, imBlockEnd, ImCache, imGet, imGetParent, imSet, inlineTypeId } from "./im-core";
+import {
+    CACHE_RERENDER_FN,
+    imBlockBegin,
+    imBlockEnd,
+    ImCache,
+    imGet,
+    getEntriesParent,
+    imSet,
+    inlineTypeId,
+    cacheEntriesAddDestructor,
+    imMemo,
+    globalStateStackPop,
+    globalStateStackPush,
+    globalStateStackGet,
+} from "./im-core";
 
 export type ValidElement = HTMLElement | SVGElement;
 export type AppendableElement = (ValidElement | Text);
-export type DomAppender<E extends ValidElement = ValidElement> = {
+export type DomAppender<E extends AppendableElement> = {
     root: E;
     ref: unknown;
     idx: number;
-    children: AppendableElement[];
     lastIdx: number;
-    childrenChanged: boolean;
+    // Set this to true manually when you want to manage the DOM children yourself.
+    // Hopefully that isn't all the time. If it is, then the framework isn't doing you too many favours.
+    // Good use case: You have to manage hundreds of thousands of DOM nodes. 
+    // From my experimentation, it is etiher MUCH faster to do this yourself instead of relying on the framework, or about the same,
+    // depending on how the browser has implemented DOM node rendering.
     manualDom: boolean;
+    // if null, root is a text node. else, it can be appended to.
+    children: (DomAppender<any>[] | null);
+    rendered: boolean;
+    parentIdx: number;
+    childrenChanged: boolean;
 };
 
-export function newDomAppender<E extends ValidElement>(root: E): DomAppender<E> {
+export function newDomAppender<E extends AppendableElement>(root: E, children: (DomAppender<any>[] | null)): DomAppender<E> {
     return {
         root,
         ref: null,
         idx: -1,
-        children: [],
-        lastIdx: -2,
-        childrenChanged: false,
+        children,
+        lastIdx: -1,
         manualDom: false,
+        rendered: false,
+        parentIdx: -1,
+        childrenChanged: false,
     };
+}
+
+export function appendToDomRoot(appender: DomAppender<any>, child: DomAppender<any>) {
+    assert(appender.children !== null);
+
+    const idx = ++appender.idx;
+
+    if (idx === appender.children.length) {
+        appender.children.push(child);
+        child.parentIdx = idx;
+
+        appender.childrenChanged = true;
+    } else if (idx < appender.children.length) {
+        if (appender.children[idx] !== child) {
+            if (child.parentIdx === -1) {
+                // Adding a new item to the list. Push watever was at idx onto the end, put child at idx.
+                const a = appender.children[idx];
+                a.parentIdx = appender.children.length
+                appender.children.push(a);
+                appender.children[idx] = child;
+                child.parentIdx = idx;
+            } else {
+                // swap two existing children
+                assert(appender.children[child.parentIdx] === child);
+                appender.children[child.parentIdx] = appender.children[idx];
+                appender.children[child.parentIdx].parentIdx = child.parentIdx;
+                appender.children[idx] = child;
+                appender.children[idx].parentIdx = idx;
+            }
+
+            assert(appender.children[idx].parentIdx === idx);
+            assert(appender.children[child.parentIdx] === child);
+
+            appender.childrenChanged = true;
+        }
+    } else {
+        throw new Error("Unreachable");
+    }
 }
 
 export function finalizeDomAppender(appender: DomAppender<ValidElement>) {
     if (
-        (appender.childrenChanged === true || appender.idx !== appender.lastIdx) &&
-        appender.manualDom === false
-    ) {
-        // TODO: set up a bigger example, so we can see if optimizing htis makes a difference.
-        // NOTE: the framework doesn't need to guess about what was added and removed in a diffing algorithm, it actually KNOWS!
-        // TODO: measure perf impacts.
-        // TODO: consider clear, then replace children.
-        appender.root.replaceChildren(...appender.children.slice(0, appender.idx + 1));
+        appender.children !== null &&
+        (appender.childrenChanged || appender.lastIdx !== appender.idx)
+    )  {
         appender.childrenChanged = false;
+
+        // TODO: optimize
+        for (let i = 0; i <= appender.idx; i++) {
+            const val = appender.children[i];
+
+            const realChildren = appender.root.children;
+            if (i >= realChildren.length) {
+                appender.root.append(val.root);
+            } else if (realChildren[i] !== val.root) {
+                appender.root.insertBefore(val.root, realChildren[i]);
+            }
+        }
+
+        for (let i = appender.idx + 1; i < appender.children.length; i++) {
+            appender.children[i].root.remove();
+        }
+
         appender.lastIdx = appender.idx;
     }
+
+
+    // TODO: by now everthing that wasnt rendered should be after idx. so we jsut remove those. all g. ?
+
+    // if (
+    //     (appender.childrenChanged === true || appender.idx !== appender.lastIdx) &&
+    //     appender.manualDom === false
+    // ) {
+    //     for (let i = 0; i < appender.lastIdx; i++) {
+    //         const child = appender.children[i];
+    //         if (child.rendered === false) {
+    //             child.root.remove();
+    //         }
+    //     }
+    //
+    //     appender.childrenChanged = false;
+    //     appender.lastIdx = appender.idx;
+    // }
 }
 
-export function appendToDomRoot(domAppender: DomAppender, child: AppendableElement) {
-    const i = ++domAppender.idx;
-    if (i < domAppender.children.length) {
-        if (domAppender.children[i] !== child) {
-            domAppender.childrenChanged = true;
-            domAppender.children[i] = child;
-        }
-    } else {
-        domAppender.children.push(child);
-        domAppender.childrenChanged = true;
-    }
-}
 
 
 export function imEl<K extends keyof HTMLElementTagNameMap>(
@@ -59,18 +141,23 @@ export function imEl<K extends keyof HTMLElementTagNameMap>(
     r: KeyRef<K>
 ): DomAppender<HTMLElementTagNameMap[K]> {
     // Make this entry in the current entry list, so we can delete it easily
-    const appender = imGetParent(c, newDomAppender);
+    const appender = getEntriesParent(c, newDomAppender);
 
     let childAppender: DomAppender<HTMLElementTagNameMap[K]> | undefined = imGet(c, newDomAppender);
     if (childAppender === undefined) {
         const element = document.createElement(r.val);
-        childAppender = imSet(c, newDomAppender(element));
+        childAppender = imSet(c, newDomAppender(element, []));
         childAppender.ref = r;
     }
 
-    appendToDomRoot(appender, childAppender.root);
+    appendToDomRoot(appender, childAppender);
 
-    imBlock(c, newDomAppender, childAppender);
+    // NOTE: we don't necessarily need to make this a block.
+    // we can push and pop this element from our own internal stack as we iterate, 
+    // but we can keep the entries themselves flat.
+    // THis requires we have some way to access a global context dedicated to the dom appender though.
+    // or, TODO: the framework can provide this mechanism, and we can just hook into that.
+    imBlockBegin(c, newDomAppender, childAppender);
 
     childAppender.idx = -1;
 
@@ -78,21 +165,21 @@ export function imEl<K extends keyof HTMLElementTagNameMap>(
 }
 
 export function imElEnd(c: ImCache, r: KeyRef<keyof HTMLElementTagNameMap>) {
-    const appender = imGetParent(c, newDomAppender);
+    const appender = getEntriesParent(c, newDomAppender);
     assert(appender.ref === r) // make sure we're popping the right thing
     finalizeDomAppender(appender);
     imBlockEnd(c);
 }
 
 
-export function imDomRoot(c: ImCache, root: ValidElement) {
+export function imDomRootBegin(c: ImCache, root: ValidElement) {
     let appender = imGet(c, newDomAppender);
     if (appender === undefined) {
-        appender = imSet(c, newDomAppender(root));
+        appender = imSet(c, newDomAppender(root, []));
         appender.ref = root;
     }
 
-    imBlock(c, newDomAppender, appender);
+    imBlockBegin(c, newDomAppender, appender);
 
     appender.idx = -1;
 
@@ -100,7 +187,7 @@ export function imDomRoot(c: ImCache, root: ValidElement) {
 }
 
 export function imDomRootEnd(c: ImCache, root: ValidElement) {
-    let appender = imGetParent(c, newDomAppender);
+    let appender = getEntriesParent(c, newDomAppender);
     assert(appender.ref === root);
     finalizeDomAppender(appender);
 
@@ -109,24 +196,50 @@ export function imDomRootEnd(c: ImCache, root: ValidElement) {
 
 
 interface Stringifyable {
+    // Allows you to memoize the text on the object reference, and not the literal string itself, as needed.
+    // Also, most objects in JavaScript already implement this.
     toString(): string;
 }
 
+/**
+ * This method manages a HTML Text node. So of course, we named it
+ * `imStr`.
+ */
 export function imStr(c: ImCache, value: Stringifyable): Text {
-    let textNode; textNode = imGet(c, imStr);
-    if (textNode === undefined) textNode = imSet(c, document.createTextNode(""));
+    let textNodeLeafAppender; textNodeLeafAppender = imGet(c, inlineTypeId(imStr));
+    if (textNodeLeafAppender === undefined) textNodeLeafAppender = imSet(c, newDomAppender(document.createTextNode(""), null));
 
     // The user can't select this text node if we're constantly setting it, so it's behind a cache
     let lastValue = imGet(c, inlineTypeId(document.createTextNode));
     if (lastValue !== value) {
         imSet(c, value);
-        textNode.nodeValue = value.toString();
+        textNodeLeafAppender.root.nodeValue = value.toString();
     }
 
-    const domAppender = imGetParent(c, newDomAppender);
-    appendToDomRoot(domAppender, textNode);
+    const domAppender = getEntriesParent(c, newDomAppender);
+    appendToDomRoot(domAppender, textNodeLeafAppender);
 
-    return textNode;
+    return textNodeLeafAppender.root;
+}
+
+// TODO: not scaleable for the same reason imState isn't scaleable. we gotta think of something better that lets us have more dependencies/arguments to the formatter
+export function imStrFmt<T>(c: ImCache, value: T, formatter: (val: T) => string): Text {
+    let textNodeLeafAppender; textNodeLeafAppender = imGet(c, inlineTypeId(imStr));
+    if (textNodeLeafAppender === undefined) textNodeLeafAppender = imSet(c, newDomAppender(document.createTextNode(""), null));
+
+    const formatterChanged = imMemo(c, formatter);
+
+    // The user can't select this text node if we're constantly setting it, so it's behind a cache
+    let lastValue = imGet(c, inlineTypeId(document.createTextNode));
+    if (lastValue !== value || formatterChanged !== 0) {
+        imSet(c, value);
+        textNodeLeafAppender.root.nodeValue = formatter(value);
+    }
+
+    const domAppender = getEntriesParent(c, newDomAppender);
+    appendToDomRoot(domAppender, textNodeLeafAppender);
+
+    return textNodeLeafAppender.root;
 }
 
 export let stylesSet = 0;
@@ -136,11 +249,17 @@ export let attrsSet = 0;
 export function elSetStyle<K extends (keyof ValidElement["style"])>(
     c: ImCache,
     key: K,
-    value: string
+    value: string,
+    root = elGet(c),
 ) {
-    const domAppender = imGetParent(c, newDomAppender);
-    domAppender.root.style[key] = value;
+    // @ts-expect-error its fine tho
+    root.style[key] = value;
     stylesSet++;
+}
+
+export function elSetTextSafetyRemoved(c: ImCache, val: string) {
+    let el = elGet(c);
+    el.textContent = val;
 }
 
 
@@ -149,7 +268,7 @@ export function elSetClass(
     className: string,
     enabled: boolean | number = true,
 ): boolean {
-    const domAppender = imGetParent(c, newDomAppender);
+    const domAppender = getEntriesParent(c, newDomAppender);
 
     if (enabled !== false && enabled !== 0) {
         domAppender.root.classList.add(className);
@@ -167,7 +286,7 @@ export function elSetAttr(
     attr: string,
     val: string | null
 ) {
-    const domAppender = imGetParent(c, newDomAppender);
+    const domAppender = getEntriesParent(c, newDomAppender);
 
     if (val !== null) {
         domAppender.root.setAttribute(attr, val);
@@ -178,10 +297,19 @@ export function elSetAttr(
     attrsSet++;
 }
 
+// Nicer API, but generating the attributes dict is expensive. Don't call this every frame!
+export function elSetAttributes(c: ImCache, attrs: Record<string, string | string[]>) {
+    const el = elGet(c);
+    for (const key in attrs) {
+        let val = attrs[key];
+        if (Array.isArray(val)) val = val.join(" ");
+        el.setAttribute(key, val);
+    }
+}
+
 
 export function elGetAppender(c: ImCache): DomAppender<ValidElement> {
-    const domAppender = imGetParent(c, newDomAppender);
-    return domAppender;
+    return getEntriesParent(c, newDomAppender);
 }
 
 export function elGet(c: ImCache) {
@@ -197,10 +325,12 @@ export function imOn<K extends keyof HTMLElementEventMap>(
     let state; state = imGet(c, inlineTypeId(imOn));
     if (!state) {
         const val: {
+            el: ValidElement;
             eventType: KeyRef<keyof HTMLElementEventMap> | null;
             eventValue: Event | null;
             eventListener: (e: HTMLElementEventMap[K]) => void;
         } = {
+            el: elGet(c),
             eventType: null,
             eventValue: null,
             eventListener: (e: HTMLElementEventMap[K]) => {
@@ -229,6 +359,373 @@ export function imOn<K extends keyof HTMLElementEventMap>(
     }
 
     return result;
+}
+
+export function getGlobalEventSystem() {
+    return globalStateStackGet(gssEventSystems);
+}
+
+export function elHasMousePress(c: ImCache, el = elGet(c)): boolean {
+    const ev = getGlobalEventSystem();
+    return elIsInSetThisFrame(el, ev.mouse.mouseDownElements)
+}
+
+export function elHasMouseUp(c: ImCache, el = elGet(c)): boolean {
+    const ev = getGlobalEventSystem();
+    return elIsInSetThisFrame(el, ev.mouse.mouseUpElements)
+}
+
+export function elHasMouseClick(c: ImCache, el = elGet(c)): boolean {
+    const ev = getGlobalEventSystem();
+    return elIsInSetThisFrame(el, ev.mouse.mouseClickElements)
+}
+
+export function elHasMouseOver(c: ImCache, el = elGet(c)): boolean {
+    const ev = getGlobalEventSystem();
+    return ev.mouse.mouseOverElements.has(el);
+}
+
+function elIsInSetThisFrame(el: ValidElement, set: Set<ValidElement>) {
+    const result = set.has(el);
+    set.delete(el);
+    return result;
+}
+
+export type SizeState = {
+    width: number;
+    height: number;
+}
+
+export type ImKeyboardState = {
+    // We need to use this approach instead of a buffered approach like `keysPressed: string[]`, so that a user
+    // may call `preventDefault` on the html event as needed.
+    // NOTE: another idea is to do `keys.keyDown = null` to prevent other handlers in this framework
+    // from knowing about this event.
+    keyDown: KeyboardEvent | null;
+    keyUp: KeyboardEvent | null;
+    blur: boolean;
+};
+
+
+export type ImMouseState = {
+    lastX: number;
+    lastY: number;
+
+    leftMouseButton: boolean;
+    middleMouseButton: boolean;
+    rightMouseButton: boolean;
+
+    dX: number;
+    dY: number;
+    X: number;
+    Y: number;
+
+    /**
+     * NOTE: if you want to use this, you'll have to prevent scroll event propagation.
+     * See {@link imPreventScrollEventPropagation}
+     */
+    scrollWheel: number;
+
+    mouseDownElements: Set<ValidElement>;
+    mouseUpElements: Set<ValidElement>;
+    mouseClickElements: Set<ValidElement>;
+    mouseOverElements: Set<ValidElement>;
+    lastMouseOverElement: ValidElement | null;
+};
+
+export type ImGlobalEventSystem = {
+    rerender: () => void;
+    keyboard: ImKeyboardState;
+    mouse:    ImMouseState;
+    globalEventHandlers: {
+        mousedown:  (e: MouseEvent) => void;
+        mousemove:  (e: MouseEvent) => void;
+        mouseenter: (e: MouseEvent) => void;
+        mouseup:    (e: MouseEvent) => void;
+        mouseclick: (e: MouseEvent) => void;
+        wheel:      (e: WheelEvent) => void;
+        keydown:    (e: KeyboardEvent) => void;
+        keyup:      (e: KeyboardEvent) => void;
+        blur:       () => void;
+    };
+}
+
+function findParents(el: ValidElement, elements: Set<ValidElement>) {
+    elements.clear();
+    let current: ValidElement | null = el;
+    while (current !== null) {
+        elements.add(current);
+        current = current.parentElement;
+    }
+}
+
+
+export function newImGlobalEventSystem(rerenderFn: () => void): ImGlobalEventSystem {
+    const keyboard: ImKeyboardState = {
+        keyDown: null,
+        keyUp: null,
+        blur: false,
+    };
+
+    const mouse: ImMouseState = {
+        lastX: 0,
+        lastY: 0,
+
+        leftMouseButton: false,
+        middleMouseButton: false,
+        rightMouseButton: false,
+
+        dX: 0,
+        dY: 0,
+        X: 0,
+        Y: 0,
+
+        scrollWheel: 0,
+
+        mouseDownElements: new Set<ValidElement>(),
+        mouseUpElements: new Set<ValidElement>(),
+        mouseClickElements: new Set<ValidElement>(),
+        mouseOverElements: new Set<ValidElement>(),
+        lastMouseOverElement: null,
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+        mouse.lastX = mouse.X;
+        mouse.lastY = mouse.Y;
+        mouse.X = e.clientX;
+        mouse.Y = e.clientY;
+        mouse.dX += mouse.X - mouse.lastX;
+        mouse.dY += mouse.Y - mouse.lastY;
+
+        if (mouse.lastMouseOverElement !== e.target) {
+            mouse.lastMouseOverElement = e.target as ValidElement;
+            findParents(e.target as ValidElement, mouse.mouseOverElements);
+            return true;
+        }
+
+        return false
+    };
+
+    const eventSystem: ImGlobalEventSystem = {
+        rerender: rerenderFn,
+        keyboard,
+        mouse,
+        // stored, so we can dispose them later if needed.
+        globalEventHandlers: {
+            mousedown: (e: MouseEvent) => {
+                if (e.button === 0) {
+                    mouse.leftMouseButton = true;
+                } else if (e.button === 1) {
+                    mouse.middleMouseButton = true;
+                } else if (e.button === 2) {
+                    mouse.rightMouseButton = true;
+                }
+
+                findParents(e.target as ValidElement, mouse.mouseDownElements);
+                try {
+                    eventSystem.rerender();
+                } finally {
+                    mouse.mouseDownElements.clear();
+                }
+            },
+            mouseclick: (e) => {
+                findParents(e.target as ValidElement, mouse.mouseClickElements);
+                try {
+                    eventSystem.rerender();
+                } finally {
+                    mouse.mouseClickElements.clear();
+                }
+            },
+            mousemove: (e) => {
+                if (handleMouseMove(e)) eventSystem.rerender();
+            },
+            mouseenter: (e) => {
+                if (handleMouseMove(e)) eventSystem.rerender();
+            },
+            mouseup: (e: MouseEvent) => {
+                if (e.button === 0) {
+                    mouse.leftMouseButton = false;
+                } else if (e.button === 1) {
+                    mouse.middleMouseButton = false;
+                } else if (e.button === 2) {
+                    mouse.rightMouseButton = false;
+                }
+
+                findParents(e.target as ValidElement, mouse.mouseUpElements);
+                try {
+                    eventSystem.rerender();
+                } finally {
+                    mouse.mouseUpElements.clear();
+                }
+
+                eventSystem.rerender();
+            },
+            wheel: (e: WheelEvent) => {
+                mouse.scrollWheel += e.deltaX + e.deltaY + e.deltaZ;
+                e.preventDefault();
+                if (!handleMouseMove(e)) {
+                    // rerender anwyway
+                    eventSystem.rerender();
+                }
+            },
+            keydown: (e: KeyboardEvent) => {
+                keyboard.keyDown = e;
+                eventSystem.rerender();
+            },
+            keyup: (e: KeyboardEvent) => {
+                keyboard.keyUp = e;
+                eventSystem.rerender();
+            },
+            blur: () => {
+                resetMouseState(mouse, true);
+                resetKeyboardState(keyboard);
+                keyboard.blur = true;
+                eventSystem.rerender();
+            }
+        },
+    };
+
+    return eventSystem;
+}
+
+function resetKeyboardState(keyboard: ImKeyboardState) {
+    keyboard.keyDown = null
+    keyboard.keyUp = null
+    keyboard.blur = false;
+}
+
+/**
+ * See the decision matrix above {@link globalStateStackPush}
+ */
+const gssEventSystems: ImGlobalEventSystem[] = [];
+
+// TODO: is there any point in separating this from imDomRoot ?
+export function imGlobalEventSystemBegin(c: ImCache): ImGlobalEventSystem {
+    let state = imGet(c, newImGlobalEventSystem);
+    if (state === undefined) {
+        const eventSystem = newImGlobalEventSystem(c[CACHE_RERENDER_FN]);
+        addDocumentAndWindowEventListeners(eventSystem);
+        cacheEntriesAddDestructor(c, () => removeDocumentAndWindowEventListeners(eventSystem));
+        state = imSet(c, eventSystem);
+    }
+
+    globalStateStackPush(gssEventSystems, state);
+
+    return state;
+}
+
+export function imGlobalEventSystemEnd(c: ImCache, eventSystem: ImGlobalEventSystem) {
+    resetKeyboardState(eventSystem.keyboard);
+    resetMouseState(eventSystem.mouse, false);
+
+    globalStateStackPop(gssEventSystems, eventSystem);
+}
+
+export function imTrackSize(c: ImCache) {
+    let state; state = imGet(c, inlineTypeId(imTrackSize));
+    if (state === undefined) {
+        const root = elGet(c);
+
+        const self = {
+            size: { width: 0, height: 0, },
+            resized: false,
+            observer: new ResizeObserver((entries) => {
+                for (const entry of entries) {
+                    // NOTE: resize-observer cannot track the top, right, left, bottom of a rect. Sad.
+                    self.size.width = entry.contentRect.width;
+                    self.size.height = entry.contentRect.height;
+                    break;
+                }
+
+                c[CACHE_RERENDER_FN]();
+            })
+        };
+
+        self.observer.observe(root);
+        cacheEntriesAddDestructor(c, () => {
+            self.observer.disconnect()
+        });
+
+        state = imSet(c, self);
+    }
+
+    return state;
+
+}
+
+function newPreventScrollEventPropagationState() {
+    return { 
+        isBlocking: true,
+        scrollY: 0,
+    };
+}
+
+export function imPreventScrollEventPropagation(c: ImCache) {
+    let state = imGet(c, newPreventScrollEventPropagationState);
+    if (state === undefined) {
+        const val = newPreventScrollEventPropagationState();
+
+        let el = elGet(c);
+        const handler = (e: Event) => {
+            if (val.isBlocking === true) {
+                e.preventDefault();
+            }
+        };
+
+        el.addEventListener("wheel", handler);
+        cacheEntriesAddDestructor(c, () =>  el.removeEventListener("wheel", handler));
+
+        state = imSet(c, val);
+    }
+
+    const { mouse } = getGlobalEventSystem();
+    if (state.isBlocking === true && elHasMouseOver(c) && mouse.scrollWheel !== 0) {
+        state.scrollY += mouse.scrollWheel;
+        mouse.scrollWheel = 0;
+    } else {
+        state.scrollY = 0;
+    }
+
+    return state;
+}
+
+export function resetMouseState(mouse: ImMouseState, clearPersistedStateAsWell: boolean) {
+    mouse.dX = 0;
+    mouse.dY = 0;
+    mouse.lastX = mouse.X;
+    mouse.lastY = mouse.Y;
+
+    mouse.scrollWheel = 0;
+
+    if (clearPersistedStateAsWell === true) {
+        mouse.leftMouseButton = false;
+        mouse.middleMouseButton = false;
+        mouse.rightMouseButton = false;
+    }
+}
+
+export function addDocumentAndWindowEventListeners(eventSystem: ImGlobalEventSystem) {
+    document.addEventListener("mousedown", eventSystem.globalEventHandlers.mousedown);
+    document.addEventListener("mousemove", eventSystem.globalEventHandlers.mousemove);
+    document.addEventListener("mouseenter", eventSystem.globalEventHandlers.mouseenter);
+    document.addEventListener("mouseup", eventSystem.globalEventHandlers.mouseup);
+    document.addEventListener("click", eventSystem.globalEventHandlers.mouseclick);
+    document.addEventListener("wheel", eventSystem.globalEventHandlers.wheel);
+    document.addEventListener("keydown", eventSystem.globalEventHandlers.keydown);
+    document.addEventListener("keyup", eventSystem.globalEventHandlers.keyup);
+    window.addEventListener("blur", eventSystem.globalEventHandlers.blur);
+}
+
+export function removeDocumentAndWindowEventListeners(eventSystem: ImGlobalEventSystem) {
+    document.removeEventListener("mousedown", eventSystem.globalEventHandlers.mousedown);
+    document.removeEventListener("mousemove", eventSystem.globalEventHandlers.mousemove);
+    document.removeEventListener("mouseenter", eventSystem.globalEventHandlers.mouseenter);
+    document.removeEventListener("mouseup", eventSystem.globalEventHandlers.mouseup);
+    document.removeEventListener("click", eventSystem.globalEventHandlers.mouseclick);
+    document.removeEventListener("wheel", eventSystem.globalEventHandlers.wheel);
+    document.removeEventListener("keydown", eventSystem.globalEventHandlers.keydown);
+    document.removeEventListener("keyup", eventSystem.globalEventHandlers.keyup);
+    window.removeEventListener("blur", eventSystem.globalEventHandlers.blur);
 }
 
 
