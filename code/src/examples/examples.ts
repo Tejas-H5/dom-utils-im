@@ -107,6 +107,10 @@ function imExamples(c: ImCache) {
         } imElEnd(c, EL_DIV);
 
         imEl(c, EL_DIV); {
+            imStr(c, "[" + c.length + " stack size ]");
+        } imElEnd(c, EL_DIV);
+
+        imEl(c, EL_DIV); {
             imStr(c, "[" + numAnimations + " animation in progress ]");
         } imElEnd(c, EL_DIV);
     } imElEnd(c, EL_DIV);
@@ -527,7 +531,6 @@ function imOldRandomStuffExampleApplication(c: ImCache, t: number) {
 
                 imEl(c, EL_DIV); imStr(c, "Grid size: " + gridState.gridRows * gridState.gridCols); imElEnd(c, EL_DIV);
 
-                // NOTE: static list for performance. the grid size never changes. xD
                 imFor(c); for (let row = 0; row < gridRows; row++) {
                     imEl(c, EL_DIV); {
                         if (isFirstishRender(c)) {
